@@ -35,9 +35,21 @@ fi
 # Setup
 # ============================================================
 
+_init_venv() {
+    # Create venv and re-detect paths
+    $SYS_PYTHON -m venv .venv
+    if [[ -f .venv/Scripts/python.exe ]]; then
+        PYTHON=".venv/Scripts/python.exe"
+        PIP=".venv/Scripts/pip.exe"
+    else
+        PYTHON=".venv/bin/python"
+        PIP=".venv/bin/pip"
+    fi
+}
+
 setup() {
     echo "==> Creating venv and installing dependencies (CPU)..."
-    $SYS_PYTHON -m venv .venv
+    _init_venv
     $PYTHON -m pip install --upgrade pip
     $PIP install -r requirements.txt
     echo "==> Setup complete."
@@ -45,7 +57,7 @@ setup() {
 
 setup-cuda() {
     echo "==> Creating venv and installing dependencies (CUDA 12.4)..."
-    $SYS_PYTHON -m venv .venv
+    _init_venv
     $PYTHON -m pip install --upgrade pip
     $PIP install torch torchvision --index-url https://download.pytorch.org/whl/cu124
     $PIP install -r requirements.txt
