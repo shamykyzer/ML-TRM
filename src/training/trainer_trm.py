@@ -166,7 +166,6 @@ class TRMTrainer:
             "steps_taken": 0.0, "puzzle_acc": 0.0,
         }
         n_batches = 0
-
         pbar = tqdm(self.train_loader, desc=f"Epoch {epoch + 1}", leave=False)
         for inputs, labels in pbar:
             inputs = inputs.to(self.device)
@@ -174,8 +173,8 @@ class TRMTrainer:
 
             metrics = deep_supervision_step(
                 model=self.model,
-                inputs=inputs,
-                labels=labels,
+                inputs=macro_inputs,
+                labels=macro_labels,
                 loss_fn=self.loss_fn,
                 optimizer=self.optimizer,
                 ema=self.ema,
@@ -198,6 +197,7 @@ class TRMTrainer:
                 ce=f"{metrics['ce_loss']:.3f}",
                 q=f"{metrics['q_mean']:.3f}",
                 acc=f"{metrics['puzzle_acc']:.3f}",
+                step=f"{self.global_step}",
             )
 
         return {k: v / max(1, n_batches) for k, v in epoch_metrics.items()}
