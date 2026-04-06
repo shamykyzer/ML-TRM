@@ -1,0 +1,86 @@
+name: Training Progress
+
+on:
+  push:
+    paths:
+      - 'experiments/*_train_log.csv'
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse training logs
+        id: stats
+        run: |
+          echo "## Training Progress Report" > summary.md
+          echo "" >> summary.md
+          echo "| Model | Epoch | Loss | Val Acc | Best Acc | Time (min) |" >> summary.md
+          echo "|-------|-------|------|---------|----------|------------|" >> summary.md
+
+          for log in experiments/*_train_log.csv; do
+            [ -f "$log" ] || continue
+            NAME=$(basename "$log" _train_log.csv)
+            LAST=$(tail -1 "$log" 2>/dev/null)
+            [ -z "$LAST" ] && continue
+
+            # Parse CSV columns (different formats for TRM vs LLM)
+            if echo "$NAME" | grep -q "trm"; then
+              # TRM: epoch,ce_loss,q_mean,steps_taken,val_cell_acc,val_puzzle_acc,best_puzzle_acc,elapsed_min
+              EPOCH=$(echo "$LAST" | cut -d',' -f1)
+              LOSS=$(echo "$LAST" | cut -d',' -f2)
+              VAL_ACC=$(echo "$LAST" | cut -d',' -f6)
+              BEST_ACC=$(echo "$LAST" | cut -d',' -f7)
+              ELAPSED=$(echo "$LAST" | cut -d',' -f8)
+            else
+              # LLM/Distill: epoch,loss,val_puzzle_acc,elapsed_min
+              EPOCH=$(echo "$LAST" | cut -d',' -f1)
+              LOSS=$(echo "$LAST" | cut -d',' -f2)
+              VAL_ACC=$(echo "$LAST" | cut -d',' -f3)
+              BEST_ACC="$VAL_ACC"
+              ELAPSED=$(echo "$LAST" | cut -d',' -f4)
+            fi
+
+            echo "| $NAME | $EPOCH | $LOSS | $VAL_ACC | $BEST_ACC | $ELAPSED |" >> summary.md
+          done
+
+          echo "" >> summary.md
+          echo "_Updated: $(date -u '+%Y-%m-%d %H:%M UTC')_" >> summary.md
+          cat summary.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Create notification issue comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const summary = fs.readFileSync('summary.md', 'utf8');
+
+            // Find or create the tracking issue
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'training-progress',
+              state: 'open',
+            });
+
+            let issueNumber;
+            if (issues.data.length > 0) {
+              issueNumber = issues.data[0].number;
+            } else {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: 'Training Progress Tracker',
+                labels: ['training-progress'],
+                body: 'Auto-updated training stats. Watch this issue for notifications.',
+              });
+              issueNumber = created.data.number;
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: summary,
+            });

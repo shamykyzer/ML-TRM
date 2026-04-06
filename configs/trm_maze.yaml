@@ -1,0 +1,36 @@
+model:
+  model_type: trm_maze
+  d_model: 512
+  ff_hidden: 2048
+  n_heads: 8
+  vocab_size: 6         # pad=0, CHARSET '#'=1,' '=2,'S'=3,'G'=4,'o'=5
+  seq_len: 900          # 30x30 grid
+  num_classes: 6        # ignore index 0 in loss
+
+training:
+  lr: 0.0001
+  betas: [0.9, 0.95]
+  weight_decay: 1.0
+  warmup_steps: 2000
+  batch_size: 16
+  grad_accum_steps: 48  # effective batch = 768
+  epochs: 5000
+  ema_decay: 0.999
+  n_latent: 6
+  T_deep: 3
+  N_sup: 16
+  act_threshold: 0.5
+  max_grad_norm: 1.0
+  use_wandb: false
+  log_interval: 50
+  save_interval: 500
+
+data:
+  dataset: maze
+  data_dir: data/maze-30x30-hard-1k
+  num_workers: 4
+
+seed: 42
+device: cuda
+checkpoint_dir: models
+experiment_dir: experiments
