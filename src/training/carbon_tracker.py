@@ -1,4 +1,11 @@
+import logging
 import os
+import warnings
+
+# Suppress noisy pynvml/codecarbon GPU warnings on WSL
+logging.getLogger("codecarbon").setLevel(logging.ERROR)
+warnings.filterwarnings("ignore", message=".*Failed to retrieve gpu.*")
+warnings.filterwarnings("ignore", message=".*NVMLError.*")
 
 from codecarbon import EmissionsTracker
 
@@ -11,7 +18,8 @@ class CarbonTracker:
         self.tracker = EmissionsTracker(
             project_name=experiment_name,
             output_dir=output_dir,
-            log_level="warning",
+            log_level="error",
+            gpu_ids=None,  # Disable GPU tracking on WSL (NVML not supported)
         )
         self._emissions = None
 

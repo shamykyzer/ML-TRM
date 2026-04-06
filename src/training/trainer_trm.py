@@ -225,7 +225,7 @@ class TRMTrainer:
             from src.models.recursion import deep_recursion
 
             for _ in range(self.tc.N_sup):
-                (y, z), logits, q = deep_recursion(
+                (y, z), logits, q, _q_logits = deep_recursion(
                     self.model.block, self.model.output_head, self.model.q_head,
                     x, y, z, n=self.tc.n_latent, T=self.tc.T_deep,
                 )
