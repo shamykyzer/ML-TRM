@@ -27,5 +27,5 @@ data:
 
 seed: 42
 device: cuda
-checkpoint_dir: models
-experiment_dir: experiments
+checkpoint_dir: models/llm
+experiment_dir: experiments/llm
