@@ -37,7 +37,7 @@ def deep_recursion(
     z: torch.Tensor,
     n: int = 6,
     T: int = 3,
-) -> tuple[tuple[torch.Tensor, torch.Tensor], torch.Tensor, torch.Tensor]:
+) -> tuple[tuple[torch.Tensor, torch.Tensor], torch.Tensor, torch.Tensor, torch.Tensor]:
     """Outer recursion loop: T passes of latent_recursion, only last has gradients.
 
     Args:
@@ -53,7 +53,8 @@ def deep_recursion(
     Returns:
         (y_detached, z_detached): Detached states for carrying forward.
         logits: [B, L, num_classes] output predictions.
-        q: [B] halting probability per sample.
+        q: [B] halting probability (sigmoid).
+        q_logits: [B] raw halting logits (pre-sigmoid, for BCE loss).
     """
     # T-1 passes WITHOUT gradients (saves memory)
     with torch.no_grad():

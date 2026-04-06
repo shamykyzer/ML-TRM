@@ -231,7 +231,7 @@ x = torch.randint(1, 11, (2, 81))
 emb = ms.embedding(x)
 y = ms.y_init.expand(2,-1,-1).clone()
 z = ms.z_init.expand(2,-1,-1).clone()
-(y,z), logits, q = deep_recursion(ms.block, ms.output_head, ms.q_head, emb, y, z, n=2, T=2)
+(y,z), logits, q, _q_logits = deep_recursion(ms.block, ms.output_head, ms.q_head, emb, y, z, n=2, T=2)
 print(f'logits: {logits.shape} | q: {q.shape}')
 print('=== All OK ===')
 "

@@ -15,7 +15,7 @@ class ModelType(str, Enum):
 class ModelConfig(BaseModel):
     model_type: ModelType = ModelType.TRM_SUDOKU
     d_model: int = 512
-    ff_hidden: int = 1536
+    ff_hidden: int = 2048
     n_heads: int = 8
     vocab_size: int = 11
     seq_len: int = 81

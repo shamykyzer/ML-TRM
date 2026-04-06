@@ -29,9 +29,9 @@
 
 | Machine | Terminal 1 | Terminal 2 | Est. Time |
 |---------|-----------|-----------|-----------|
-| **A** | `make setup-cuda && make train-sudoku` | `bash scripts/auto_push.sh` | ~12-14 hrs |
-| **B** | `make setup-cuda && make train-maze` | `bash scripts/auto_push.sh` | ~3-4 days |
-| **C** | `make setup-cuda && make train-llm-all && make train-distill` then `make data-maze-aug && make train-maze-fast` | `bash scripts/auto_push.sh` | ~1-2 days |
+| **A** | `python run.py setup-cuda && python run.py train-sudoku` | `bash scripts/auto_push.sh` | ~12-14 hrs |
+| **B** | `python run.py setup-cuda && python run.py train-maze` | `bash scripts/auto_push.sh` | ~3-4 days |
+| **C** | `python run.py setup-cuda && python run.py train-llm-all && python run.py train-distill` then `python run.py data-maze-aug && python run.py train-maze-fast` | `bash scripts/auto_push.sh` | ~1-2 days |
 
 ### What Each Machine Trains
 
@@ -58,8 +58,8 @@ All LLMs expected to score ~0%. That's the point.
 ### If Training Crashes
 
 ```bash
-make resume-sudoku    # Resumes from models/latest.pt
-make resume-maze      # Resumes from models/latest.pt
+python run.py resume-sudoku    # Resumes from models/latest.pt
+python run.py resume-maze      # Resumes from models/latest.pt
 ```
 
 ### Remote Monitoring
@@ -74,14 +74,14 @@ make resume-maze      # Resumes from models/latest.pt
 
 ```bash
 # TRM models
-make eval-sudoku
-make eval-maze
+python run.py eval-sudoku
+python run.py eval-maze
 
 # LLM baselines
-make eval-llm
-make eval-llm-qwen
-make eval-llm-smollm
-make eval-llm-llama
+python run.py eval-llm
+python run.py eval-llm-qwen
+python run.py eval-llm-smollm
+python run.py eval-llm-llama
 ```
 
 ### Metrics to Collect

@@ -46,7 +46,7 @@ Deep Supervision (N_sup=16 steps, each a separate optimizer step)
 ## Project Structure
 
 ```
-Machine-Learning/
+ML-TRM/
 +-- data/
 |   +-- common.py                  # PuzzleDatasetMetadata + dihedral_transform
 |   +-- build_sudoku_dataset.py    # Downloads & preprocesses Sudoku-Extreme from HF
@@ -87,7 +87,8 @@ Machine-Learning/
 +-- .github/workflows/
 |   +-- training-notify.yml        # GitHub Action: post training stats on push
 +-- main.py                        # CLI entrypoint (train / eval / distill)
-+-- Makefile                       # Shortcuts for common tasks
++-- run.py                         # Task runner (python run.py <target>)
++-- run.sh                         # Bash task runner with interactive menu
 +-- models/                        # Saved checkpoints
 +-- experiments/                   # CodeCarbon logs + training CSV logs
 +-- results/                       # Evaluation outputs
@@ -99,47 +100,47 @@ Machine-Learning/
 
 ```bash
 # Setup with CUDA GPU support (recommended)
-make setup-cuda
+python run.py setup-cuda
 
 # Or CPU-only setup
-make setup
+python run.py setup
 
 # Verify everything works
-make verify
+python run.py verify
 ```
 
 ## Quick Start
 
 ```bash
 # 1. Preprocess data (downloads from HuggingFace)
-make data-sudoku              # 1K train / 423K test (matches paper)
-make data-maze                # 1K train / 1K test
+python run.py data-sudoku           # 1K train / 423K test (matches paper)
+python run.py data-maze             # 1K train / 1K test
 
 # 2. Train TRM on Sudoku
-make train-sudoku
+python run.py train-sudoku
 
 # 3. Evaluate
-make eval-sudoku
+python run.py eval-sudoku
 ```
 
 ## Training All Models
 
 ```bash
 # TRM models
-make train-sudoku             # TRM-MLP on Sudoku-Extreme (~12-14 hrs on RTX 4070)
-make train-maze               # TRM-Att on Maze-Hard (~3-4 days on RTX 4070)
+python run.py train-sudoku          # TRM-MLP on Sudoku-Extreme (~12-14 hrs on RTX 4070)
+python run.py train-maze            # TRM-Att on Maze-Hard (~3-4 days on RTX 4070)
 
 # LLM baselines (all 4 sequentially, ~4-6 hrs total)
-make train-llm-all
+python run.py train-llm-all
 
 # Or individually:
-make train-llm                # GPT-2 (124M)
-make train-llm-qwen           # Qwen2.5-0.5B (494M)
-make train-llm-smollm         # SmolLM2-360M (360M)
-make train-llm-llama          # Llama-3.2-1B (1.2B)
+python run.py train-llm             # GPT-2 (124M)
+python run.py train-llm-qwen        # Qwen2.5-0.5B (494M)
+python run.py train-llm-smollm      # SmolLM2-360M (360M)
+python run.py train-llm-llama       # Llama-3.2-1B (1.2B)
 
 # Knowledge distillation (requires trained GPT-2 checkpoint)
-make train-distill
+python run.py train-distill
 ```
 
 ### Resuming Training
@@ -147,8 +148,8 @@ make train-distill
 If training crashes, resume from the last checkpoint:
 
 ```bash
-make resume-sudoku            # Resume from models/latest.pt
-make resume-maze
+python run.py resume-sudoku         # Resume from models/latest.pt
+python run.py resume-maze
 ```
 
 ### Remote Progress Monitoring

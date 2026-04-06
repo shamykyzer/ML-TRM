@@ -6,7 +6,6 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from src.evaluation.metrics import cell_accuracy, puzzle_accuracy
 from src.models.recursion import deep_recursion
 from src.training.carbon_tracker import CarbonTracker
 from src.training.ema import EMA
@@ -53,7 +52,7 @@ def evaluate_trm(
 
             steps = 0
             for step in range(tc.N_sup):
-                (y, z), logits, q = deep_recursion(
+                (y, z), logits, q, _q_logits = deep_recursion(
                     model.block, model.output_head, model.q_head,
                     x, y, z, n=tc.n_latent, T=tc.T_deep,
                 )

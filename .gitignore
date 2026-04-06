@@ -1,19 +1,10 @@
 __pycache__/
 *.pyc
 .venv/
-data/sudoku-extreme-full/
-data/maze-30x30-hard-1k/
-data/data/
 *.npy
 models/**/*.pt
 experiments/**/*.csv
 experiments/**/*.json
-results/*.json
+results/**/*.json
 .env
 wandb/
-
-# Large training data (too big for GitHub)
-data/sudoku-extreme-full/train/*.npy
-data/sudoku-extreme-full/test/*.npy
-data/maze-30x30-hard-1k/train/*.npy
-data/maze-30x30-hard-1k/test/*.npy

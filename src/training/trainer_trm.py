@@ -173,8 +173,8 @@ class TRMTrainer:
 
             metrics = deep_supervision_step(
                 model=self.model,
-                inputs=macro_inputs,
-                labels=macro_labels,
+                inputs=inputs,
+                labels=labels,
                 loss_fn=self.loss_fn,
                 optimizer=self.optimizer,
                 ema=self.ema,

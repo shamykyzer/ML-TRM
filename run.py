@@ -48,7 +48,7 @@ def setup_cuda():
     run(f"{PYTHON} -m pip install --upgrade pip")
     run(f"{PIP} install torch torchvision --index-url https://download.pytorch.org/whl/cu124")
     run(f"{PIP} install -r requirements.txt")
-    run(f'{PYTHON} -c "import torch; print(f\'CUDA: {{torch.cuda.is_available()}}, GPU: {{torch.cuda.get_device_name(0) if torch.cuda.is_available() else chr(78)+chr(79)+chr(78)+chr(69)}}\')"')
+    run(f'{PYTHON} -c "import torch; print(f\'CUDA: {{torch.cuda.is_available()}}, GPU: {{torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"NONE\"}}\')"')
 
 def setup_dev():
     """Setup + install dev tools."""
@@ -198,7 +198,7 @@ def verify():
         "emb = ms.embedding(x); "
         "y = ms.y_init.expand(2,-1,-1).clone(); "
         "z = ms.z_init.expand(2,-1,-1).clone(); "
-        "(y,z), logits, q = deep_recursion(ms.block, ms.output_head, ms.q_head, emb, y, z, n=2, T=2); "
+        "(y,z), logits, q, _q_logits = deep_recursion(ms.block, ms.output_head, ms.q_head, emb, y, z, n=2, T=2); "
         "print(f'logits: {logits.shape} | q: {q.shape}'); "
         "print('=== All OK ==='); "
         '"')
