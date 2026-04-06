@@ -75,15 +75,15 @@ def setup_dev():
 # ============================================================
 
 def data_sudoku():
-    """Download and preprocess full Sudoku-Extreme dataset."""
+    """Download and preprocess Sudoku-Extreme (1K train, augmentation is on-the-fly)."""
     run(f"{PYTHON} build_sudoku_dataset.py --output-dir sudoku-extreme-full", cwd=os.path.join(ROOT, "data"))
 
 def data_sudoku_aug():
-    """Preprocess Sudoku with 1000x augmentation (full training)."""
+    """Preprocess Sudoku with 1000x pre-generated augmentation (not needed, on-the-fly is used)."""
     run(f"{PYTHON} build_sudoku_dataset.py --output-dir sudoku-extreme-full --num-aug 1000", cwd=os.path.join(ROOT, "data"))
 
 def data_sudoku_small():
-    """Preprocess small 100-sample Sudoku subset (for testing)."""
+    """Preprocess small 100-sample Sudoku subset (for quick testing only)."""
     run(f"{PYTHON} build_sudoku_dataset.py --output-dir sudoku-extreme-full --subsample-size 100", cwd=os.path.join(ROOT, "data"))
 
 def data_maze():
@@ -374,25 +374,65 @@ TARGETS = {
 }
 
 def show_help():
-    print("Usage: python run.py <target>\n")
-    # Group by category
+    CYAN = "\033[96m"
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+    RESET = "\033[0m"
+
+    print(f"""
+{BOLD}{CYAN}===============================================================
+                   TRM Project Task Runner
+==============================================================={RESET}
+
+  {DIM}Usage:{RESET}  python run.py {CYAN}<command>{RESET}
+""")
+
     groups = [
-        ("Setup", ["setup", "setup-cuda", "setup-dev"]),
-        ("Data", ["data-sudoku", "data-sudoku-aug", "data-sudoku-small", "data-maze", "data-maze-aug", "data-all"]),
-        ("Training", ["train-sudoku", "train-maze", "train-maze-fast", "train-llm", "train-llm-qwen",
-                       "train-llm-smollm", "train-llm-llama", "train-llm-all", "train-distill"]),
-        ("Resume", ["resume-sudoku", "resume-maze"]),
-        ("Evaluation", ["eval-sudoku", "eval-maze", "eval-llm", "eval-llm-qwen", "eval-llm-smollm", "eval-llm-llama"]),
-        ("Verification", ["verify", "verify-data", "smoke-test"]),
-        ("Utilities", ["clean", "clean-all", "lint", "format"]),
-        ("Pipelines (fire-and-forget)", ["pipeline", "pipeline-sudoku", "pipeline-maze", "pipeline-llm"]),
+        ("Setup", [
+            ("setup-cuda", "Create venv + install with CUDA GPU support"),
+            ("setup", "Create venv + install (CPU only)"),
+        ]),
+        ("Data", [
+            ("data-sudoku", "Download Sudoku-Extreme (1K train / 423K test)"),
+            ("data-maze", "Download Maze-Hard (1K train / 1K test)"),
+            ("data-all", "Download both datasets"),
+        ]),
+        ("Train", [
+            ("train-sudoku", "TRM-MLP on Sudoku  (60K epochs, ~24h on 3070)"),
+            ("train-maze", "TRM-Att on Maze    (5K epochs,  ~5d on 3070)"),
+            ("train-llm-all", "All 4 LLM baselines sequentially (~4-6h)"),
+            ("train-distill", "Knowledge distillation (needs trained GPT-2)"),
+        ]),
+        ("Resume", [
+            ("resume-sudoku", "Resume sudoku from last checkpoint"),
+            ("resume-maze", "Resume maze from last checkpoint"),
+        ]),
+        ("Evaluate", [
+            ("eval-sudoku", "Evaluate best TRM-Sudoku checkpoint"),
+            ("eval-maze", "Evaluate best TRM-Maze checkpoint"),
+            ("eval-llm", "Evaluate GPT-2 baseline"),
+        ]),
+        ("Pipelines", [
+            ("pipeline", "Full: setup + data + train everything"),
+            ("pipeline-sudoku", "Setup + data + train sudoku only"),
+            ("pipeline-maze", "Setup + data + train maze only"),
+        ]),
+        ("Utils", [
+            ("verify", "Check imports + forward pass"),
+            ("smoke-test", "Quick 2-batch end-to-end test"),
+            ("clean", "Remove data, checkpoints, experiments"),
+        ]),
     ]
-    for group_name, keys in groups:
-        print(f"{group_name}:")
-        for k in keys:
-            doc = TARGETS[k].__doc__ or ""
-            print(f"  {k:<20s} {doc}")
+
+    for group_name, items in groups:
+        print(f"  {BOLD}{CYAN}{group_name}{RESET}")
+        for cmd, desc in items:
+            print(f"    {CYAN}{cmd:<20s}{RESET} {desc}")
         print()
+
+    print(f"  {DIM}Tip: run 'bash scripts/auto_push.sh' in a separate terminal")
+    print(f"  to auto-push training stats to GitHub every hour.{RESET}")
+    print()
 
 
 if __name__ == "__main__":

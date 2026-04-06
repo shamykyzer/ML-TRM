@@ -137,12 +137,26 @@ cd ..
 ### 4. Verify setup
 
 ```bash
-python -c "
-import torch; print(f'PyTorch {torch.__version__}, CUDA: {torch.cuda.is_available()}')
-from src.models.trm_sudoku import TRMSudoku, TRMMaze; print('Models: OK')
-from src.data.sudoku_dataset import get_sudoku_loaders; print('Sudoku data: OK')
-from src.data.maze_dataset import get_maze_loaders; print('Maze data: OK')
-"
+python run.py verify
+```
+
+## Quick Start
+
+All commands are available via `python run.py`. Run `python run.py help` to see the full menu with descriptions.
+
+```bash
+python run.py setup-cuda          # 1. Create venv + install with CUDA
+python run.py data-all            # 2. Download both datasets
+python run.py train-sudoku        # 3. Train TRM on Sudoku (60K epochs)
+python run.py train-maze          # 4. Train TRM on Maze (5K epochs)
+```
+
+Or use pipelines to run everything in one command:
+
+```bash
+python run.py pipeline-sudoku     # Setup + data + train sudoku
+python run.py pipeline-maze       # Setup + data + train maze
+python run.py pipeline            # Setup + data + train everything
 ```
 
 ## Training
@@ -156,16 +170,11 @@ from src.data.maze_dataset import get_maze_loaders; print('Maze data: OK')
 
 GPU batch sizes are auto-detected. Times decrease as ACT kicks in (model learns to stop early).
 
-### Train Sudoku (run first, faster)
+### Train TRM models
 
 ```bash
-python main.py --config configs/trm_sudoku.yaml
-```
-
-### Train Maze (run after sudoku finishes)
-
-```bash
-python main.py --config configs/trm_maze.yaml
+python run.py train-sudoku        # TRM-MLP on Sudoku (~24h on RTX 3070)
+python run.py train-maze          # TRM-Att on Maze   (~5d on RTX 3070)
 ```
 
 **Do not run both at the same time** -- they share GPU VRAM.
@@ -173,17 +182,8 @@ python main.py --config configs/trm_maze.yaml
 ### Train LLM baselines
 
 ```bash
-# All 4 LLMs sequentially (~4-6 hrs total)
-python run.py train-llm-all
-
-# Or individually:
-python main.py --config configs/llm_config.yaml      # GPT-2 (124M)
-python main.py --config configs/llm_qwen.yaml        # Qwen2.5-0.5B
-python main.py --config configs/llm_smollm.yaml      # SmolLM2-360M
-python main.py --config configs/llm_llama.yaml        # Llama-3.2-1B
-
-# Knowledge distillation (requires trained GPT-2 checkpoint)
-python run.py train-distill
+python run.py train-llm-all       # All 4 LLMs sequentially (~4-6h)
+python run.py train-distill       # Knowledge distillation (needs trained GPT-2)
 ```
 
 ### Resuming training
@@ -191,15 +191,23 @@ python run.py train-distill
 Training can be resumed from any checkpoint. Progress is fully restored (optimizer, scheduler, EMA, epoch count).
 
 ```bash
-python main.py --config configs/trm_sudoku.yaml --resume models/sudoku/latest.pt
-python main.py --config configs/trm_maze.yaml --resume models/maze/latest.pt
+python run.py resume-sudoku       # Resume from models/sudoku/latest.pt
+python run.py resume-maze         # Resume from models/maze/latest.pt
 ```
 
 To increase epochs after an initial run, edit the `epochs` value in the config YAML, then resume.
 
+### Evaluation
+
+```bash
+python run.py eval-sudoku         # Evaluate best TRM-Sudoku checkpoint
+python run.py eval-maze           # Evaluate best TRM-Maze checkpoint
+python run.py eval-llm            # Evaluate GPT-2 baseline
+```
+
 ### Remote progress monitoring
 
-**Terminal 2 -- auto-push training stats every hour:**
+**In a separate terminal -- auto-push training stats every hour:**
 
 ```bash
 bash scripts/auto_push.sh
