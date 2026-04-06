@@ -409,32 +409,74 @@ HELP
 # ============================================================
 
 menu() {
+    # Colors
+    local RST='\033[0m'
+    local BOLD='\033[1m'
+    local DIM='\033[2m'
+    local CYAN='\033[36m'
+    local GREEN='\033[32m'
+    local YELLOW='\033[33m'
+    local MAGENTA='\033[35m'
+    local RED='\033[31m'
+    local WHITE='\033[97m'
+
+    # Detect GPU
+    local gpu_info="none detected"
+    if command -v nvidia-smi &>/dev/null; then
+        gpu_info=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo "none detected")
+    fi
+
+    # Detect venv status
+    local venv_status="${RED}not created${RST}"
+    if [[ -f .venv/Scripts/python.exe ]] || [[ -f .venv/bin/python ]]; then
+        venv_status="${GREEN}ready${RST}"
+    fi
+
+    clear
     echo ""
-    echo "=========================================="
-    echo "   TRM Project"
-    echo "=========================================="
+    echo -e "  ${DIM}┌──────────────────────────────────────────────┐${RST}"
+    echo -e "  ${DIM}│${RST}  ${BOLD}${CYAN}TRM${RST} ${WHITE}Thinking with Recurrence Model${RST}            ${DIM}│${RST}"
+    echo -e "  ${DIM}├──────────────────────────────────────────────┤${RST}"
+    echo -e "  ${DIM}│${RST}  venv: ${venv_status}                               ${DIM}│${RST}"
+    echo -e "  ${DIM}│${RST}  gpu:  ${GREEN}${gpu_info}${RST}"
+    echo -e "  ${DIM}└──────────────────────────────────────────────┘${RST}"
     echo ""
-    echo "  1) Setup (CUDA)          5) Verify installation"
-    echo "  2) Pipeline: Sudoku      6) Smoke test"
-    echo "  3) Pipeline: Maze        7) Clean"
-    echo "  4) Pipeline: LLM         8) Help (all commands)"
+    echo -e "  ${BOLD}${YELLOW}PIPELINES${RST}  ${DIM}setup + data + train (fire-and-forget)${RST}"
     echo ""
-    echo "  0) Quit"
+    echo -e "    ${CYAN}1${RST})  Sudoku         ${DIM}TRM-MLP on Sudoku-Extreme${RST}"
+    echo -e "    ${CYAN}2${RST})  Maze           ${DIM}TRM-Att on Maze-Hard${RST}"
+    echo -e "    ${CYAN}3${RST})  LLM            ${DIM}Fine-tune all 4 LLM baselines${RST}"
+    echo -e "    ${CYAN}4${RST})  Full           ${DIM}All of the above${RST}"
+    echo ""
+    echo -e "  ${BOLD}${GREEN}TOOLS${RST}"
+    echo ""
+    echo -e "    ${CYAN}5${RST})  Setup CUDA     ${DIM}Create venv + install deps${RST}"
+    echo -e "    ${CYAN}6${RST})  Verify         ${DIM}Import + forward pass check${RST}"
+    echo -e "    ${CYAN}7${RST})  Smoke test     ${DIM}Quick 2-batch training test${RST}"
+    echo ""
+    echo -e "  ${BOLD}${MAGENTA}UTILS${RST}"
+    echo ""
+    echo -e "    ${CYAN}8${RST})  Clean          ${DIM}Remove checkpoints + data${RST}"
+    echo -e "    ${CYAN}9${RST})  Help           ${DIM}Show all available commands${RST}"
+    echo ""
+    echo -e "    ${CYAN}0${RST})  Quit"
     echo ""
 
     while true; do
-        read -rp "Select [0-8]: " choice
+        echo -ne "  ${BOLD}>${RST} "
+        read -r choice
         case "$choice" in
-            0) echo "Bye!"; exit 0 ;;
-            1) setup-cuda ;;
-            2) pipeline-sudoku ;;
-            3) pipeline-maze ;;
-            4) pipeline-llm ;;
-            5) verify ;;
-            6) smoke-test ;;
-            7) clean ;;
-            8) help; exit 0 ;;
-            *) echo "Invalid selection."; continue ;;
+            1) echo ""; pipeline-sudoku ;;
+            2) echo ""; pipeline-maze ;;
+            3) echo ""; pipeline-llm ;;
+            4) echo ""; pipeline ;;
+            5) echo ""; setup-cuda ;;
+            6) echo ""; verify ;;
+            7) echo ""; smoke-test ;;
+            8) echo ""; clean ;;
+            9) echo ""; help; exit 0 ;;
+            0) echo ""; exit 0 ;;
+            *) echo -e "  ${RED}Invalid selection.${RST}"; continue ;;
         esac
         break
     done
