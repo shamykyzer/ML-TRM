@@ -96,72 +96,120 @@ ML-TRM/
 
 ## Setup
 
-**Requirements:** Python 3.10+, NVIDIA GPU recommended
+**Requirements:** Python 3.10-3.12, NVIDIA GPU with CUDA
+
+### 1. Create virtual environment
 
 ```bash
-# Setup with CUDA GPU support (recommended)
-python run.py setup-cuda
+# Windows
+python -m venv .venv
+.venv\Scripts\activate
 
-# Or CPU-only setup
-python run.py setup
-
-# Verify everything works
-python run.py verify
+# Linux/Mac
+python -m venv .venv
+source .venv/bin/activate
 ```
 
-## Quick Start
+### 2. Install dependencies
 
 ```bash
-# 1. Preprocess data (downloads from HuggingFace)
-python run.py data-sudoku           # 1K train / 423K test (matches paper)
-python run.py data-maze             # 1K train / 1K test
+# Install PyTorch with CUDA first (visit https://pytorch.org for your CUDA version)
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 
-# 2. Train TRM on Sudoku
-python run.py train-sudoku
-
-# 3. Evaluate
-python run.py eval-sudoku
+# Install all other dependencies
+pip install -r requirements.txt
 ```
 
-## Training All Models
+### 3. Build datasets (one-time, downloads from HuggingFace)
 
 ```bash
-# TRM models
-python run.py train-sudoku          # TRM-MLP on Sudoku-Extreme (~12-14 hrs on RTX 4070)
-python run.py train-maze            # TRM-Att on Maze-Hard (~3-4 days on RTX 4070)
+cd data
 
-# LLM baselines (all 4 sequentially, ~4-6 hrs total)
+# Sudoku-Extreme: 1K train / 423K test
+python build_sudoku_dataset.py --output-dir sudoku-extreme-full
+
+# Maze-Hard: 1K train / 1K test
+python build_maze_dataset.py --output-dir maze-30x30-hard-1k
+
+cd ..
+```
+
+### 4. Verify setup
+
+```bash
+python -c "
+import torch; print(f'PyTorch {torch.__version__}, CUDA: {torch.cuda.is_available()}')
+from src.models.trm_sudoku import TRMSudoku, TRMMaze; print('Models: OK')
+from src.data.sudoku_dataset import get_sudoku_loaders; print('Sudoku data: OK')
+from src.data.maze_dataset import get_maze_loaders; print('Maze data: OK')
+"
+```
+
+## Training
+
+### Estimated training times
+
+| Task | Epochs | RTX 3070 (8GB) | RTX 4070 (12GB) | RTX 5070 (12GB) | L40S (48GB) |
+|------|--------|----------------|-----------------|-----------------|-------------|
+| Sudoku | 60K | ~24 hrs | ~17 hrs | ~14 hrs | ~4 hrs |
+| Maze | 5K | ~5 days | ~3 days | ~2.5 days | ~7 hrs |
+
+GPU batch sizes are auto-detected. Times decrease as ACT kicks in (model learns to stop early).
+
+### Train Sudoku (run first, faster)
+
+```bash
+python main.py --config configs/trm_sudoku.yaml
+```
+
+### Train Maze (run after sudoku finishes)
+
+```bash
+python main.py --config configs/trm_maze.yaml
+```
+
+**Do not run both at the same time** -- they share GPU VRAM.
+
+### Train LLM baselines
+
+```bash
+# All 4 LLMs sequentially (~4-6 hrs total)
 python run.py train-llm-all
 
 # Or individually:
-python run.py train-llm             # GPT-2 (124M)
-python run.py train-llm-qwen        # Qwen2.5-0.5B (494M)
-python run.py train-llm-smollm      # SmolLM2-360M (360M)
-python run.py train-llm-llama       # Llama-3.2-1B (1.2B)
+python main.py --config configs/llm_config.yaml      # GPT-2 (124M)
+python main.py --config configs/llm_qwen.yaml        # Qwen2.5-0.5B
+python main.py --config configs/llm_smollm.yaml      # SmolLM2-360M
+python main.py --config configs/llm_llama.yaml        # Llama-3.2-1B
 
 # Knowledge distillation (requires trained GPT-2 checkpoint)
 python run.py train-distill
 ```
 
-### Resuming Training
+### Resuming training
 
-If training crashes, resume from the last checkpoint:
+Training can be resumed from any checkpoint. Progress is fully restored (optimizer, scheduler, EMA, epoch count).
 
 ```bash
-python run.py resume-sudoku         # Resume from models/latest.pt
-python run.py resume-maze
+python main.py --config configs/trm_sudoku.yaml --resume models/sudoku/latest.pt
+python main.py --config configs/trm_maze.yaml --resume models/maze/latest.pt
 ```
 
-### Remote Progress Monitoring
+To increase epochs after an initial run, edit the `epochs` value in the config YAML, then resume.
 
-Training logs are written to `experiments/*_train_log.csv`. To auto-push every hour:
+### Remote progress monitoring
+
+**Terminal 2 -- auto-push training stats every hour:**
 
 ```bash
-# Run in a separate terminal
 bash scripts/auto_push.sh
 ```
 
-A GitHub Action posts training stats to a GitHub Issue on each push. Subscribe to the issue for phone notifications via the GitHub mobile app.
+A GitHub Action (`.github/workflows/training-notify.yml`) posts training stats to a GitHub Issue on each push. Subscribe to the issue for phone notifications via the GitHub mobile app.
+
+Stats are logged every `log_interval` epochs:
+- Sudoku: every 200 epochs
+- Maze: every 50 epochs
 
 ## Data Encoding
 
@@ -169,6 +217,7 @@ A GitHub Action posts training stats to a GitHub Issue on each push. Subscribe t
 - **Vocab:** 11 tokens (pad=0, digits 0-9 shifted to tokens 1-10)
 - **Grid:** 9x9 flattened to 81 tokens (row-major)
 - **Train:** 1,000 puzzles (17 given clues each) | **Test:** 422,786 puzzles
+- **Augmentation:** On-the-fly random shuffling each epoch (digit permutation, row/column band shuffle, transpose) -- equivalent to 1000x augmentation without disk cost
 
 ### Maze
 - **Vocab:** 6 tokens (pad=0, '#'=1, ' '=2, 'S'=3, 'G'=4, 'o'=5)
