@@ -28,7 +28,7 @@ training:
 data:
   dataset: sudoku
   data_dir: data/sudoku-extreme-full
-  num_workers: 4
+  num_workers: 0    # Windows requires 0 (multiprocessing DataLoader crashes on Windows)
 
 seed: 42
 device: cuda
