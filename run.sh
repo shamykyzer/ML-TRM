@@ -54,32 +54,31 @@ setup-dev() {
 
 data-sudoku() {
     echo "==> Building Sudoku-Extreme dataset..."
-    cd data && ../$PYTHON build_sudoku_dataset.py --output-dir sudoku-extreme-full
+    (cd data && ../$PYTHON build_sudoku_dataset.py --output-dir sudoku-extreme-full)
 }
 
 data-sudoku-aug() {
     echo "==> Building Sudoku-Extreme dataset (1000x augmentation)..."
-    cd data && ../$PYTHON build_sudoku_dataset.py --output-dir sudoku-extreme-full --num-aug 1000
+    (cd data && ../$PYTHON build_sudoku_dataset.py --output-dir sudoku-extreme-full --num-aug 1000)
 }
 
 data-sudoku-small() {
     echo "==> Building Sudoku-Extreme small subset (100 samples)..."
-    cd data && ../$PYTHON build_sudoku_dataset.py --output-dir sudoku-extreme-full --subsample-size 100
+    (cd data && ../$PYTHON build_sudoku_dataset.py --output-dir sudoku-extreme-full --subsample-size 100)
 }
 
 data-maze() {
     echo "==> Building Maze-Hard dataset..."
-    cd data && ../$PYTHON build_maze_dataset.py --output-dir maze-30x30-hard-1k
+    (cd data && ../$PYTHON build_maze_dataset.py --output-dir maze-30x30-hard-1k)
 }
 
 data-maze-aug() {
     echo "==> Building Maze-Hard dataset (dihedral augmentation)..."
-    cd data && ../$PYTHON build_maze_dataset.py --output-dir maze-30x30-hard-1k --aug
+    (cd data && ../$PYTHON build_maze_dataset.py --output-dir maze-30x30-hard-1k --aug)
 }
 
 data-all() {
     data-sudoku
-    cd "$SCRIPT_DIR"
     data-maze
 }
 
@@ -216,15 +215,14 @@ print('=== All OK ===')
 
 verify-data() {
     echo "==> Verifying data scripts..."
-    cd data && ../$PYTHON -c "from common import PuzzleDatasetMetadata, dihedral_transform; print('data/common.py OK')"
-    cd "$SCRIPT_DIR/data" && ../$PYTHON build_sudoku_dataset.py --help > /dev/null && echo "build_sudoku_dataset.py OK"
-    cd "$SCRIPT_DIR/data" && ../$PYTHON build_maze_dataset.py --help > /dev/null && echo "build_maze_dataset.py OK"
+    (cd data && ../$PYTHON -c "from common import PuzzleDatasetMetadata, dihedral_transform; print('data/common.py OK')")
+    (cd data && ../$PYTHON build_sudoku_dataset.py --help > /dev/null && echo "build_sudoku_dataset.py OK")
+    (cd data && ../$PYTHON build_maze_dataset.py --help > /dev/null && echo "build_maze_dataset.py OK")
 }
 
 smoke-test() {
     echo "==> Running smoke test (small subset + 2 batch train)..."
     data-sudoku-small
-    cd "$SCRIPT_DIR"
     $PYTHON -c "
 import torch
 from src.utils.config import load_config

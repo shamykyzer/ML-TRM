@@ -48,6 +48,7 @@ class LLMTrainer:
         )
 
         os.makedirs(config.checkpoint_dir, exist_ok=True)
+        os.makedirs(config.experiment_dir, exist_ok=True)
 
         self.log_path = os.path.join(config.experiment_dir, f"{self.model_tag}_train_log.csv")
 

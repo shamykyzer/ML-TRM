@@ -89,6 +89,7 @@ class DistillationTrainer:
 
         self.carbon = CarbonTracker("distill_train", output_dir=config.experiment_dir)
         os.makedirs(config.checkpoint_dir, exist_ok=True)
+        os.makedirs(config.experiment_dir, exist_ok=True)
 
         self.log_path = os.path.join(config.experiment_dir, "distill_train_log.csv")
 
