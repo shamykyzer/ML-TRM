@@ -123,14 +123,23 @@ data-all() {
 # Training
 # ============================================================
 
+_auto_tune() {
+    # Auto-detect GPU and write optimal config
+    local config_path="$1"
+    echo "==> Auto-tuning config for detected GPU..."
+    $PYTHON -c "from src.utils.gpu_config import auto_tune_config; auto_tune_config('$config_path')"
+}
+
 train-sudoku() {
     echo "==> Training TRM-MLP on Sudoku-Extreme..."
-    $PYTHON main.py --mode train --config configs/trm_sudoku.yaml
+    _auto_tune "configs/trm_sudoku.yaml"
+    $PYTHON main.py --mode train --config configs/trm_sudoku_tuned.yaml
 }
 
 train-maze() {
     echo "==> Training TRM-Att on Maze-Hard..."
-    $PYTHON main.py --mode train --config configs/trm_maze.yaml
+    _auto_tune "configs/trm_maze.yaml"
+    $PYTHON main.py --mode train --config configs/trm_maze_tuned.yaml
 }
 
 train-maze-fast() {
