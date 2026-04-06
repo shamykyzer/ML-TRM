@@ -64,9 +64,10 @@ def deep_recursion(
     y, z = latent_recursion(net, x, y, z, n)
 
     logits = output_head(y)
-    q = torch.sigmoid(q_head(y).mean(dim=1)).squeeze(-1)  # [B]
+    q_logits = q_head(y).mean(dim=1).squeeze(-1)  # [B] raw logits
+    q = torch.sigmoid(q_logits)  # [B] probability (for inference/ACT)
 
-    return (y.detach(), z.detach()), logits, q
+    return (y.detach(), z.detach()), logits, q, q_logits
 
 
 def deep_supervision_step(
@@ -122,7 +123,7 @@ def deep_supervision_step(
         with torch.amp.autocast("cuda", enabled=use_amp):
             x = model.embedding(inputs)
 
-            (y, z), logits, q = deep_recursion(
+            (y, z), logits, q, q_logits = deep_recursion(
                 model.block, model.output_head, model.q_head, x, y, z, n, T
             )
 
@@ -131,7 +132,7 @@ def deep_supervision_step(
             # Correctness: all non-ignored positions must match
             mask = labels != 0
             correct_per_sample = ((logits.argmax(-1) == labels) | ~mask).all(dim=-1).float()
-            q_loss = F.binary_cross_entropy(q, correct_per_sample)
+            q_loss = F.binary_cross_entropy_with_logits(q_logits, correct_per_sample)
 
             loss = ce_loss + q_loss
 
