@@ -7,7 +7,19 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Detect venv python/pip
+# Detect system python (for venv creation)
+if command -v python3 &>/dev/null; then
+    SYS_PYTHON="python3"
+elif command -v python &>/dev/null; then
+    SYS_PYTHON="python"
+elif command -v py &>/dev/null; then
+    SYS_PYTHON="py -3"
+else
+    echo "Error: No python found. Install Python 3 and add it to PATH."
+    exit 1
+fi
+
+# Detect venv python/pip (for running project code)
 if [[ -f .venv/Scripts/python.exe ]]; then
     PYTHON=".venv/Scripts/python.exe"
     PIP=".venv/Scripts/pip.exe"
@@ -15,8 +27,8 @@ elif [[ -f .venv/bin/python ]]; then
     PYTHON=".venv/bin/python"
     PIP=".venv/bin/pip"
 else
-    PYTHON="python"
-    PIP="pip"
+    PYTHON="$SYS_PYTHON"
+    PIP="$SYS_PYTHON -m pip"
 fi
 
 # ============================================================
@@ -25,7 +37,7 @@ fi
 
 setup() {
     echo "==> Creating venv and installing dependencies (CPU)..."
-    python -m venv .venv
+    $SYS_PYTHON -m venv .venv
     $PYTHON -m pip install --upgrade pip
     $PIP install -r requirements.txt
     echo "==> Setup complete."
@@ -33,7 +45,7 @@ setup() {
 
 setup-cuda() {
     echo "==> Creating venv and installing dependencies (CUDA 12.4)..."
-    python -m venv .venv
+    $SYS_PYTHON -m venv .venv
     $PYTHON -m pip install --upgrade pip
     $PIP install torch torchvision --index-url https://download.pytorch.org/whl/cu124
     $PIP install -r requirements.txt
