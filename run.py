@@ -14,17 +14,29 @@ import platform
 ROOT = os.path.dirname(os.path.abspath(__file__))
 os.chdir(ROOT)
 
+# Use a shorter venv path on Windows to avoid MAX_PATH issues during pip install.
+if platform.system() == "Windows":
+    VENV_DIR = os.environ.get("TRM_VENV_DIR", os.path.join(os.path.expanduser("~"), ".venvs", "ml-trm"))
+else:
+    VENV_DIR = os.environ.get("TRM_VENV_DIR", os.path.join(ROOT, ".venv"))
+
 # --- Detect venv python/pip ---
 if platform.system() == "Windows":
-    PYTHON = os.path.join(ROOT, ".venv", "Scripts", "python.exe")
-    PIP = os.path.join(ROOT, ".venv", "Scripts", "pip.exe")
+    PYTHON = os.path.join(VENV_DIR, "Scripts", "python.exe")
+    PIP = os.path.join(VENV_DIR, "Scripts", "pip.exe")
 else:
-    PYTHON = os.path.join(ROOT, ".venv", "bin", "python")
-    PIP = os.path.join(ROOT, ".venv", "bin", "pip")
+    PYTHON = os.path.join(VENV_DIR, "bin", "python")
+    PIP = os.path.join(VENV_DIR, "bin", "pip")
 
 
 def run(cmd, cwd=None):
     """Run a command, stream output, abort on failure."""
+    if platform.system() == "Windows":
+        # Quote known executables so shell=True works with spaces in paths.
+        for exe in (sys.executable, PYTHON, PIP):
+            quoted = f'"{exe}"'
+            if exe in cmd and quoted not in cmd:
+                cmd = cmd.replace(exe, quoted)
     print(f"\n>>> {cmd}\n")
     result = subprocess.run(cmd, shell=True, cwd=cwd or ROOT)
     if result.returncode != 0:
@@ -38,13 +50,15 @@ def run(cmd, cwd=None):
 
 def setup():
     """Create venv and install all dependencies (CPU)."""
-    run(f"{sys.executable} -m venv .venv")
+    os.makedirs(os.path.dirname(VENV_DIR), exist_ok=True)
+    run(f"{sys.executable} -m venv {VENV_DIR}")
     run(f"{PYTHON} -m pip install --upgrade pip")
     run(f"{PIP} install -r requirements.txt")
 
 def setup_cuda():
     """Create venv and install with CUDA 12.4 GPU support."""
-    run(f"{sys.executable} -m venv .venv")
+    os.makedirs(os.path.dirname(VENV_DIR), exist_ok=True)
+    run(f"{sys.executable} -m venv {VENV_DIR}")
     run(f"{PYTHON} -m pip install --upgrade pip")
     run(f"{PIP} install torch torchvision --index-url https://download.pytorch.org/whl/cu124")
     run(f"{PIP} install -r requirements.txt")
@@ -258,10 +272,9 @@ def clean_all():
     """Clean everything including venv."""
     import shutil
     clean()
-    venv = os.path.join(ROOT, ".venv")
-    if os.path.exists(venv):
-        shutil.rmtree(venv)
-        print("Removed .venv")
+    if os.path.exists(VENV_DIR):
+        shutil.rmtree(VENV_DIR)
+        print(f"Removed venv at {VENV_DIR}")
 
 def lint():
     """Run linting."""
