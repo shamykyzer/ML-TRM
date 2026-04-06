@@ -2,6 +2,7 @@ import csv
 import json
 import os
 import time
+import warnings
 
 import torch
 import torch.nn as nn
@@ -60,7 +61,9 @@ class TRMTrainer:
                 return step / max(1, self.tc.warmup_steps)
             return 1.0
 
-        self.scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            self.scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda)
 
         self.loss_fn = StableMaxCrossEntropy(ignore_index=0)
         self.ema = EMA(model, decay=self.tc.ema_decay)
@@ -111,8 +114,10 @@ class TRMTrainer:
         self.start_epoch = ckpt.get("epoch", 0) + 1
         self.best_acc = ckpt.get("best_puzzle_acc", 0.0)
         # Advance scheduler to match global_step
-        for _ in range(self.global_step):
-            self.scheduler.step()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            for _ in range(self.global_step):
+                self.scheduler.step()
         print(f"Resumed at epoch {self.start_epoch}, step {self.global_step}, best_acc {self.best_acc:.4f}")
 
     def train(self) -> None:
