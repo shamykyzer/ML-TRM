@@ -57,8 +57,21 @@ setup() {
 
 setup-cuda() {
     echo "==> Creating venv and installing dependencies (CUDA 12.4)..."
-    _init_venv
+    echo "    NOTE: Requires Python 3.10-3.12 (PyTorch CUDA wheels not available for 3.13+)"
+    # Use Python 3.10-3.12 specifically (CUDA wheels don't exist for 3.13+)
+    if command -v py &> /dev/null; then
+        py -3.12 -m venv .venv 2>/dev/null || py -3.11 -m venv .venv 2>/dev/null || py -3.10 -m venv .venv 2>/dev/null || { echo "ERROR: Need Python 3.10-3.12 for CUDA. Install from python.org"; exit 1; }
+    elif command -v python3.12 &> /dev/null; then
+        python3.12 -m venv .venv
+    elif command -v python3.11 &> /dev/null; then
+        python3.11 -m venv .venv
+    else
+        echo "WARNING: Using default python - may not have CUDA wheel support"
+        python -m venv .venv
+    fi
+    _detect_venv
     $PYTHON -m pip install --upgrade pip
+    # Install CUDA PyTorch FIRST to avoid CPU-only version from requirements.txt
     $PIP install torch torchvision --index-url https://download.pytorch.org/whl/cu124
     $PIP install -r requirements.txt
     $PYTHON -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"NONE\"}')"
