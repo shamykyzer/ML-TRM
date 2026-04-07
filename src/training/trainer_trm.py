@@ -127,10 +127,22 @@ class TRMTrainer:
 
         best_acc = self.best_acc
         epoch_times = []
+        eta_str = ""
         for epoch in range(self.start_epoch, self.tc.epochs):
             epoch_start = time.time()
-            metrics = self._train_epoch(epoch)
+            metrics = self._train_epoch(epoch, eta_str)
             epoch_times.append(time.time() - epoch_start)
+
+            # Update ETA for next epoch's progress bar
+            recent = epoch_times[-10:]
+            avg_epoch_sec = sum(recent) / len(recent)
+            remaining_epochs = self.tc.epochs - (epoch + 1)
+            eta_sec = remaining_epochs * avg_epoch_sec
+            eta_hrs = eta_sec / 3600
+            if eta_hrs >= 24:
+                eta_str = f"{eta_hrs / 24:.1f}d"
+            else:
+                eta_str = f"{eta_hrs:.1f}h"
 
             if (epoch + 1) % self.tc.log_interval == 0:
                 val_metrics = self.evaluate()
@@ -178,14 +190,17 @@ class TRMTrainer:
         with open(results_path, "w") as f:
             json.dump({"best_puzzle_acc": best_acc, "emissions": emissions}, f, indent=2)
 
-    def _train_epoch(self, epoch: int) -> dict:
+    def _train_epoch(self, epoch: int, eta_str: str = "") -> dict:
         self.model.train()
         epoch_metrics = {
             "ce_loss": 0.0, "q_loss": 0.0, "q_mean": 0.0,
             "steps_taken": 0.0, "puzzle_acc": 0.0,
         }
         n_batches = 0
-        pbar = tqdm(self.train_loader, desc=f"Epoch {epoch + 1}", leave=True)
+        desc = f"Epoch {epoch + 1}/{self.tc.epochs}"
+        if eta_str:
+            desc += f" [ETA {eta_str}]"
+        pbar = tqdm(self.train_loader, desc=desc, leave=True)
         for inputs, labels in pbar:
             inputs = inputs.to(self.device)
             labels = labels.to(self.device)
