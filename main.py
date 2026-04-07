@@ -1,3 +1,5 @@
+import os
+
 from argdantic import ArgParser
 from pydantic import BaseModel
 
@@ -35,6 +37,26 @@ def main(cfg: RunConfig):
 
 
 def _run_train(config: ExperimentConfig, resume: str = "") -> None:
+    increment = config.training.epoch_increment or config.training.epochs
+
+    while True:
+        _run_train_once(config, resume)
+
+        if not config.training.auto_continue:
+            break
+
+        # Bump epochs and resume from latest checkpoint
+        latest = os.path.join(config.checkpoint_dir, "latest.pt")
+        if not os.path.isfile(latest):
+            print("auto_continue: latest.pt not found, stopping")
+            break
+
+        config.training.epochs += increment
+        resume = latest
+        print(f"\n=== AUTO-CONTINUE: extending to {config.training.epochs} epochs ===\n")
+
+
+def _run_train_once(config: ExperimentConfig, resume: str = "") -> None:
     model_type = config.model.model_type
 
     if model_type == ModelType.TRM_SUDOKU:

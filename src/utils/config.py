@@ -54,6 +54,10 @@ class TrainingConfig(BaseModel):
     distill_alpha: float = 0.7
     distill_temperature: float = 4.0
 
+    # Auto-continue: keep training in increments when epochs finish successfully
+    auto_continue: bool = False
+    epoch_increment: int = 0  # 0 = same as initial epochs
+
     # Logging
     use_wandb: bool = False
     wandb_project: str = "trm-coursework"
