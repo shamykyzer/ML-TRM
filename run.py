@@ -76,7 +76,7 @@ def setup_dev():
 
 def data_sudoku():
     """Download and preprocess Sudoku-Extreme (1K train, augmentation is on-the-fly)."""
-    run(f"{PYTHON} build_sudoku_dataset.py --output-dir sudoku-extreme-full", cwd=os.path.join(ROOT, "data"))
+    run(f"{PYTHON} build_sudoku_dataset.py --output-dir sudoku-extreme-full --subsample-size 1000", cwd=os.path.join(ROOT, "data"))
 
 def data_sudoku_aug():
     """Preprocess Sudoku with 1000x pre-generated augmentation (not needed, on-the-fly is used)."""
