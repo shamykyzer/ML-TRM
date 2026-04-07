@@ -5,45 +5,61 @@ import torch
 import yaml
 
 
-# Optimal settings per GPU for TRM Sudoku (seq_len=81, d_model=512, 6.4M params)
+# Optimal settings per GPU for TRM training.
 # batch_size = max that fits in VRAM with 16 deep supervision steps + AMP
+# The paper uses effective batch_size=768, but for small datasets we skip
+# grad_accum entirely -- deep supervision already does 16 optimizer steps/batch.
 # num_workers = 0 on Windows (multiprocessing DataLoader crashes), 4 on Linux
 GPU_PROFILES = {
+    # 8GB VRAM
     "RTX 3070": {
         "vram_gb": 8,
-        "sudoku": {"batch_size": 48, "grad_accum_steps": 16},  # effective 768
-        "maze":   {"batch_size": 8,  "grad_accum_steps": 96},  # effective 768
+        "sudoku": {"batch_size": 48},
+        "maze":   {"batch_size": 8},
     },
     "RTX 4060": {
         "vram_gb": 8,
-        "sudoku": {"batch_size": 48, "grad_accum_steps": 16},  # effective 768
-        "maze":   {"batch_size": 8,  "grad_accum_steps": 96},  # effective 768
+        "sudoku": {"batch_size": 48},
+        "maze":   {"batch_size": 8},
     },
+    # 12GB VRAM
     "RTX 4070": {
         "vram_gb": 12,
-        "sudoku": {"batch_size": 128, "grad_accum_steps": 6},  # effective 768
-        "maze":   {"batch_size": 16,  "grad_accum_steps": 48}, # effective 768
+        "sudoku": {"batch_size": 128},
+        "maze":   {"batch_size": 16},
     },
     "RTX 5070": {
         "vram_gb": 12,
-        "sudoku": {"batch_size": 128, "grad_accum_steps": 6},  # effective 768
-        "maze":   {"batch_size": 16,  "grad_accum_steps": 48}, # effective 768
+        "sudoku": {"batch_size": 128},
+        "maze":   {"batch_size": 16},
     },
-    # Fallback for unknown GPUs
+    # 16GB VRAM
+    "RTX 5090": {
+        "vram_gb": 32,
+        "sudoku": {"batch_size": 256},
+        "maze":   {"batch_size": 64},
+    },
+    # 48GB VRAM (paper used L40S)
+    "L40S": {
+        "vram_gb": 48,
+        "sudoku": {"batch_size": 768},
+        "maze":   {"batch_size": 128},
+    },
+    # Fallback by VRAM size
     "default_8gb": {
         "vram_gb": 8,
-        "sudoku": {"batch_size": 32, "grad_accum_steps": 24},
-        "maze":   {"batch_size": 4,  "grad_accum_steps": 192},
+        "sudoku": {"batch_size": 32},
+        "maze":   {"batch_size": 4},
     },
     "default_12gb": {
         "vram_gb": 12,
-        "sudoku": {"batch_size": 128, "grad_accum_steps": 6},
-        "maze":   {"batch_size": 16,  "grad_accum_steps": 48},
+        "sudoku": {"batch_size": 128},
+        "maze":   {"batch_size": 16},
     },
     "default_16gb+": {
         "vram_gb": 16,
-        "sudoku": {"batch_size": 256, "grad_accum_steps": 3},
-        "maze":   {"batch_size": 32,  "grad_accum_steps": 24},
+        "sudoku": {"batch_size": 256},
+        "maze":   {"batch_size": 32},
     },
 }
 
@@ -85,35 +101,19 @@ def get_num_workers() -> int:
     return 4
 
 
-def auto_tune_config(config_path: str) -> str:
-    """Read a YAML config, apply GPU-optimal overrides, write to a temp config, return path."""
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
-
+def apply_gpu_overrides(config) -> None:
+    """Apply GPU-optimal batch_size and num_workers to an ExperimentConfig in-place."""
     gpu_profile = detect_gpu()
-    task = config.get("data", {}).get("dataset", "sudoku")
+    task = config.data.dataset if hasattr(config.data, "dataset") else "sudoku"
     task_profile = gpu_profile.get(task, gpu_profile.get("sudoku", {}))
 
-    # Apply overrides
-    if "training" in config:
-        config["training"]["batch_size"] = task_profile.get("batch_size", config["training"]["batch_size"])
-        config["training"]["grad_accum_steps"] = task_profile.get("grad_accum_steps", config["training"].get("grad_accum_steps", 1))
+    if "batch_size" in task_profile:
+        config.training.batch_size = task_profile["batch_size"]
 
-    if "data" in config:
-        config["data"]["num_workers"] = get_num_workers()
+    config.data.num_workers = get_num_workers()
 
-    effective_batch = config["training"]["batch_size"] * config["training"]["grad_accum_steps"]
-    print(f"[GPU Config] batch_size={config['training']['batch_size']}, "
-          f"grad_accum={config['training']['grad_accum_steps']}, "
-          f"effective_batch={effective_batch}, "
-          f"num_workers={config['data']['num_workers']}")
-
-    # Write tuned config to temp file
-    tuned_path = config_path.replace(".yaml", "_tuned.yaml")
-    with open(tuned_path, "w") as f:
-        yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-
-    return tuned_path
+    print(f"[GPU Config] batch_size={config.training.batch_size}, "
+          f"num_workers={config.data.num_workers}")
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ from argdantic import ArgParser
 from pydantic import BaseModel
 
 from src.utils.config import ExperimentConfig, ModelType, load_config
+from src.utils.gpu_config import apply_gpu_overrides
 from src.utils.seed import set_seed
 
 
@@ -20,6 +21,7 @@ class RunConfig(BaseModel):
 def main(cfg: RunConfig):
     config = load_config(cfg.config)
     config.seed = cfg.seed
+    apply_gpu_overrides(config)
     set_seed(cfg.seed)
 
     if cfg.mode == "train":
