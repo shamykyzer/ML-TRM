@@ -185,7 +185,7 @@ class TRMTrainer:
             "steps_taken": 0.0, "puzzle_acc": 0.0,
         }
         n_batches = 0
-        pbar = tqdm(self.train_loader, desc=f"Epoch {epoch + 1}", leave=False)
+        pbar = tqdm(self.train_loader, desc=f"Epoch {epoch + 1}", leave=True)
         for inputs, labels in pbar:
             inputs = inputs.to(self.device)
             labels = labels.to(self.device)
