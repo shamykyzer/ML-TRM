@@ -201,8 +201,8 @@ class TRMTrainer:
             pbar.set_postfix(
                 ce=f"{metrics['ce_loss']:.3f}",
                 q=f"{metrics['q_mean']:.3f}",
+                steps=f"{metrics['steps_taken']:.0f}/16",
                 acc=f"{metrics['puzzle_acc']:.3f}",
-                step=f"{self.global_step}",
             )
 
         return {k: v / max(1, n_batches) for k, v in epoch_metrics.items()}

@@ -16,8 +16,6 @@ jobs:
         run: |
           echo "## Training Progress Report" > summary.md
           echo "" >> summary.md
-          echo "| Model | Epoch | Loss | Val Acc | Best Acc | Time (min) |" >> summary.md
-          echo "|-------|-------|------|---------|----------|------------|" >> summary.md
 
           for log in experiments/*_train_log.csv; do
             [ -f "$log" ] || continue
@@ -30,19 +28,53 @@ jobs:
               # TRM: epoch,ce_loss,q_mean,steps_taken,val_cell_acc,val_puzzle_acc,best_puzzle_acc,elapsed_min
               EPOCH=$(echo "$LAST" | cut -d',' -f1)
               LOSS=$(echo "$LAST" | cut -d',' -f2)
+              Q_MEAN=$(echo "$LAST" | cut -d',' -f3)
+              STEPS=$(echo "$LAST" | cut -d',' -f4)
+              CELL_ACC=$(echo "$LAST" | cut -d',' -f5)
               VAL_ACC=$(echo "$LAST" | cut -d',' -f6)
               BEST_ACC=$(echo "$LAST" | cut -d',' -f7)
               ELAPSED=$(echo "$LAST" | cut -d',' -f8)
+
+              echo "### $NAME" >> summary.md
+              echo "" >> summary.md
+              echo "| Metric | Value |" >> summary.md
+              echo "|--------|-------|" >> summary.md
+              echo "| Epoch | $EPOCH |" >> summary.md
+              echo "| CE Loss | $LOSS |" >> summary.md
+              echo "| Q Mean (confidence) | $Q_MEAN |" >> summary.md
+              echo "| ACT Steps | $STEPS / 16 |" >> summary.md
+              echo "| Cell Accuracy | $CELL_ACC |" >> summary.md
+              echo "| Puzzle Accuracy | $VAL_ACC |" >> summary.md
+              echo "| Best Puzzle Acc | $BEST_ACC |" >> summary.md
+              echo "| Elapsed | ${ELAPSED} min |" >> summary.md
+              echo "" >> summary.md
+
+              # ACT status indicator
+              STEPS_INT=$(echo "$STEPS" | cut -d'.' -f1)
+              if [ "$STEPS_INT" -lt 4 ] 2>/dev/null; then
+                echo "> ACT is working well (avg $STEPS steps)" >> summary.md
+              elif [ "$STEPS_INT" -lt 10 ] 2>/dev/null; then
+                echo "> ACT is starting to kick in ($STEPS steps)" >> summary.md
+              else
+                echo "> ACT not yet active ($STEPS steps) -- model still learning" >> summary.md
+              fi
             else
               # LLM/Distill: epoch,loss,val_puzzle_acc,elapsed_min
               EPOCH=$(echo "$LAST" | cut -d',' -f1)
               LOSS=$(echo "$LAST" | cut -d',' -f2)
               VAL_ACC=$(echo "$LAST" | cut -d',' -f3)
-              BEST_ACC="$VAL_ACC"
               ELAPSED=$(echo "$LAST" | cut -d',' -f4)
-            fi
 
-            echo "| $NAME | $EPOCH | $LOSS | $VAL_ACC | $BEST_ACC | $ELAPSED |" >> summary.md
+              echo "### $NAME" >> summary.md
+              echo "" >> summary.md
+              echo "| Metric | Value |" >> summary.md
+              echo "|--------|-------|" >> summary.md
+              echo "| Epoch | $EPOCH |" >> summary.md
+              echo "| Loss | $LOSS |" >> summary.md
+              echo "| Val Accuracy | $VAL_ACC |" >> summary.md
+              echo "| Elapsed | ${ELAPSED} min |" >> summary.md
+            fi
+            echo "" >> summary.md
           done
 
           echo "" >> summary.md
