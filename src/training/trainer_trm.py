@@ -126,19 +126,33 @@ class TRMTrainer:
         t_start = time.time()
 
         best_acc = self.best_acc
+        epoch_times = []
         for epoch in range(self.start_epoch, self.tc.epochs):
+            epoch_start = time.time()
             metrics = self._train_epoch(epoch)
+            epoch_times.append(time.time() - epoch_start)
 
             if (epoch + 1) % self.tc.log_interval == 0:
                 val_metrics = self.evaluate()
                 elapsed = (time.time() - t_start) / 60.0
+                # ETA based on rolling average of last 10 epochs
+                recent = epoch_times[-10:]
+                avg_epoch_sec = sum(recent) / len(recent)
+                remaining_epochs = self.tc.epochs - (epoch + 1)
+                eta_sec = remaining_epochs * avg_epoch_sec
+                eta_hrs = eta_sec / 3600
+                if eta_hrs >= 24:
+                    eta_str = f"{eta_hrs / 24:.1f}d"
+                else:
+                    eta_str = f"{eta_hrs:.1f}h"
                 tqdm.write(
                     f"Epoch {epoch + 1}/{self.tc.epochs} | "
                     f"CE: {metrics['ce_loss']:.4f} | "
                     f"Q: {metrics['q_mean']:.3f} | "
                     f"Steps: {metrics['steps_taken']:.1f} | "
                     f"Val Acc: {val_metrics['puzzle_acc']:.4f} | "
-                    f"Time: {elapsed:.0f}min"
+                    f"Time: {elapsed:.0f}min | "
+                    f"ETA: {eta_str}"
                 )
 
                 if self.tc.use_wandb and WANDB_AVAILABLE:
