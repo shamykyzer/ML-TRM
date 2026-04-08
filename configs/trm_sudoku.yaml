@@ -8,22 +8,22 @@ model:
   num_classes: 11       # ignore index 0 in loss
 
 training:
-  lr: 0.0001
+  lr: 0.001              # 10x higher LR to escape local minima (was 0.0001)
   betas: [0.9, 0.95]
-  weight_decay: 1.0
-  warmup_steps: 2000
-  batch_size: 48          # auto-tuned per GPU at runtime
-  grad_accum_steps: 1    # not used -- deep supervision does its own optimizer steps
+  weight_decay: 0.1       # reduced from 1.0 (too aggressive, preventing learning)
+  warmup_steps: 500       # faster warmup (was 2000)
+  batch_size: 32          # reduced for N_sup=8 VRAM headroom
+  grad_accum_steps: 1
   epochs: 500
   ema_decay: 0.999
   n_latent: 6           # inner recursion steps
   T_deep: 3             # outer recursion passes
-  N_sup: 4              # supervision steps (reduced for RTX 4060 speed)
+  N_sup: 8              # doubled from 4 (model needs deeper reasoning chains)
   act_threshold: 0.5
   max_grad_norm: 1.0
   use_wandb: false
-  log_interval: 10       # validate every 10 epochs
-  save_interval: 50      # checkpoint every 50 epochs
+  log_interval: 5        # validate every 5 epochs (faster feedback)
+  save_interval: 25      # checkpoint every 25 epochs
 
 data:
   dataset: sudoku
