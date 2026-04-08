@@ -18,12 +18,12 @@ training:
   ema_decay: 0.999
   n_latent: 6           # inner recursion steps
   T_deep: 3             # outer recursion passes
-  N_sup: 16             # max supervision steps
+  N_sup: 4              # supervision steps (reduced for RTX 4060 speed)
   act_threshold: 0.5
   max_grad_norm: 1.0
   use_wandb: false
-  log_interval: 25
-  save_interval: 100
+  log_interval: 10       # validate every 10 epochs
+  save_interval: 50      # checkpoint every 50 epochs
 
 data:
   dataset: sudoku
