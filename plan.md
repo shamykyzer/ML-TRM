@@ -2,7 +2,7 @@
 
 **Module:** UFCFAS-15-2 Machine Learning | **Deadline:** 1 May 2026, 17:00 BST
 **Team:** Ahmed AlShamy, Armin Ghaseminejad, Nickolas Greiner
-**Today:** 6 April 2026 | **Days remaining:** 25
+**Today:** 9 April 2026 | **Days remaining:** 22
 
 ---
 
@@ -11,14 +11,15 @@
 | Component | Status | Notes |
 |-----------|--------|-------|
 | Codebase | Done | Models, trainers, eval, data pipelines, AMP, resume support |
+| Official TRM port | In progress | Ported official arch (Q-learning ACT, StableMax CE, AdamATan2, task-type embeddings) |
 | Data preprocessing | Done | Sudoku: 1K train / 423K test. Maze: 1K train / 1K test |
 | Configs fixed | Done | ff_hidden=2048, maze vocab=6, matching official paper |
 | LLM baselines | Done | 4 models: GPT-2, Qwen2.5-0.5B, SmolLM2-360M, Llama-3.2-1B |
-| Training logs | Done | CSV logs + auto-push script + GitHub Action notifications |
+| Training logs | Done | CSV logs + W&B + auto-push script + GitHub Action notifications |
 | Resume support | Done | `--resume` flag for crash recovery |
-| Mixed precision | Done | AMP auto-enabled on CUDA (~1.5-2x speedup) |
-| Checkpoints | None | No pretrained weights available anywhere -- must train from scratch |
-| Training | Not started | Ready to run at the lab |
+| Mixed precision | Done | AMP auto-enabled on CUDA; official arch uses native bfloat16 |
+| Checkpoints | Found | Official TRM ARC checkpoint in `hf_checkpoints/` (arcprize/trm_arc_prize_verification) |
+| Training | Not started | Ready to run at the lab (both old and official architectures) |
 | Report | Not started | 6-page conference paper due May 1 |
 
 ---
@@ -39,11 +40,13 @@
 - TRM-MLP, 6.4M params, 5000 epochs on 1K puzzles
 - Expected: ~87% puzzle accuracy
 - Checkpoints: `models/best.pt`, `models/latest.pt`
+- Also run: `python main.py --config configs/trm_official_sudoku.yaml` (official arch variant)
 
 **Machine B -- TRM-Maze (core result):**
 - TRM-Att, 8.4M params, 5000 epochs on 1K mazes
 - Expected: ~85% puzzle accuracy
 - Longest training -- start first
+- Also run: `python main.py --config configs/trm_official_maze.yaml` (official arch variant)
 
 **Machine C -- All LLM baselines + fast maze:**
 1. GPT-2 (124M) + LoRA → ~30-45 min
@@ -129,6 +132,8 @@ python run.py eval-llm-llama
 |-------|------|-------------|-----------|------|-----------------|
 | TRM-MLP | Recursive | 6.4M | 6.4M | 2025 | ~87% |
 | TRM-Att | Recursive | 8.4M | 8.4M | 2025 | -- (Maze ~85%) |
+| TRM-Official-Sudoku | Recursive (official) | ~8.4M | ~8.4M | 2025 | TBD |
+| TRM-Official-Maze | Recursive (official) | ~8.4M | ~8.4M | 2025 | TBD |
 | GPT-2 + LoRA | Fine-tuned LLM | 124M | ~0.8M | 2019 | ~0% |
 | SmolLM2-360M + LoRA | Fine-tuned LLM | 360M | ~1.5M | 2024 | ~0% |
 | Qwen2.5-0.5B + LoRA | Fine-tuned LLM | 494M | ~2M | 2024 | ~0% |
