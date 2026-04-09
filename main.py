@@ -107,6 +107,76 @@ def _run_train_once(config: ExperimentConfig, resume: str = "") -> None:
         trainer = TRMTrainer(model, train_loader, val_loader, config, resume_checkpoint=resume)
         trainer.train()
 
+    elif model_type in (ModelType.TRM_OFFICIAL_SUDOKU, ModelType.TRM_OFFICIAL_MAZE):
+        from src.data.collate import official_collate_fn
+        from src.models.losses_official import ACTLossHead
+        from src.models.trm_official import TRMOfficial
+        from src.training.trainer_official import OfficialTRMTrainer
+
+        model_config = {
+            "batch_size": config.training.batch_size,
+            "seq_len": config.model.seq_len,
+            "vocab_size": config.model.vocab_size,
+            "num_task_types": config.model.num_task_types,
+            "task_emb_ndim": config.model.task_emb_ndim,
+            "task_emb_len": config.model.task_emb_len,
+            "hidden_size": config.model.d_model,
+            "expansion": config.model.ff_hidden / config.model.d_model,
+            "num_heads": config.model.n_heads,
+            "L_layers": config.model.L_layers,
+            "H_cycles": config.model.H_cycles,
+            "L_cycles": config.model.L_cycles,
+            "halt_max_steps": config.model.halt_max_steps,
+            "halt_exploration_prob": config.model.halt_exploration_prob,
+            "no_ACT_continue": config.model.no_ACT_continue,
+            "forward_dtype": config.model.forward_dtype,
+            "mlp_t": config.model.mlp_t,
+        }
+        model = TRMOfficial(model_config)
+        loss_head = ACTLossHead(model)
+        print(f"TRM-Official params: {model.param_count():,}")
+
+        collate_fn = official_collate_fn(config.training.task_id)
+
+        if config.data.dataset == "maze":
+            from src.data.maze_dataset import MazeDataset
+            from torch.utils.data import DataLoader
+
+            train_ds = MazeDataset(config.data.data_dir, "train")
+            test_ds = MazeDataset(config.data.data_dir, "test")
+            train_loader = DataLoader(
+                train_ds, batch_size=config.training.batch_size, shuffle=True,
+                num_workers=config.data.num_workers, pin_memory=True,
+                drop_last=True, collate_fn=collate_fn,
+            )
+            val_loader = DataLoader(
+                test_ds, batch_size=config.training.batch_size, shuffle=False,
+                num_workers=config.data.num_workers, pin_memory=True,
+                collate_fn=collate_fn,
+            )
+        else:
+            from src.data.sudoku_dataset import SudokuDataset
+            from torch.utils.data import DataLoader
+
+            train_ds = SudokuDataset(config.data.data_dir, "train", augment=True)
+            test_ds = SudokuDataset(config.data.data_dir, "test")
+            train_loader = DataLoader(
+                train_ds, batch_size=config.training.batch_size, shuffle=True,
+                num_workers=config.data.num_workers, pin_memory=True,
+                drop_last=True, collate_fn=collate_fn,
+            )
+            val_loader = DataLoader(
+                test_ds, batch_size=config.training.batch_size, shuffle=False,
+                num_workers=config.data.num_workers, pin_memory=True,
+                collate_fn=collate_fn,
+            )
+
+        trainer = OfficialTRMTrainer(
+            model, loss_head, train_loader, val_loader, config,
+            resume_checkpoint=resume,
+        )
+        trainer.train()
+
     elif model_type == ModelType.LLM_FINETUNE:
         from src.data.sudoku_dataset import get_sudoku_loaders
         from src.models.baseline_llm import BaselineLLM
@@ -153,6 +223,31 @@ def _run_eval(config: ExperimentConfig, checkpoint_path: str) -> None:
             batch_size=config.training.batch_size,
             num_workers=config.data.num_workers,
         )
+    elif model_type in (ModelType.TRM_OFFICIAL_SUDOKU, ModelType.TRM_OFFICIAL_MAZE):
+        from src.data.collate import official_collate_fn
+
+        collate_fn = official_collate_fn(config.training.task_id)
+
+        if config.data.dataset == "maze":
+            from src.data.maze_dataset import MazeDataset
+            from torch.utils.data import DataLoader
+
+            test_ds = MazeDataset(config.data.data_dir, "test")
+            test_loader = DataLoader(
+                test_ds, batch_size=config.training.batch_size, shuffle=False,
+                num_workers=config.data.num_workers, pin_memory=True,
+                collate_fn=collate_fn,
+            )
+        else:
+            from src.data.sudoku_dataset import SudokuDataset
+            from torch.utils.data import DataLoader
+
+            test_ds = SudokuDataset(config.data.data_dir, "test")
+            test_loader = DataLoader(
+                test_ds, batch_size=config.training.batch_size, shuffle=False,
+                num_workers=config.data.num_workers, pin_memory=True,
+                collate_fn=collate_fn,
+            )
     else:
         from src.data.sudoku_dataset import get_sudoku_loaders
         _, test_loader = get_sudoku_loaders(
