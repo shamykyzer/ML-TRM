@@ -12,18 +12,19 @@ training:
   betas: [0.9, 0.95]
   weight_decay: 1.0       # paper default
   warmup_steps: 2000
-  batch_size: 32          # small for N_sup=16 VRAM
+  batch_size: 64          # fits N_sup=16 on 12GB (RTX 5070)
   grad_accum_steps: 1
   epochs: 500
   ema_decay: 0.999
   n_latent: 6           # inner recursion steps
   T_deep: 3             # outer recursion passes
-  N_sup: 8              # max that fits on 8GB RTX 4060 (paper uses 16 on 48GB L40S)
+  N_sup: 16             # paper default (Less is More, Jolicoeur-Martineau 2025)
   act_threshold: 0.5
   max_grad_norm: 1.0
   use_wandb: false
   log_interval: 5        # validate every 5 epochs
   save_interval: 25      # checkpoint every 25 epochs
+  hf_repo_id: shamykyzer/ml-trm-checkpoints
 
 data:
   dataset: sudoku

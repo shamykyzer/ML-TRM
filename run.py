@@ -56,11 +56,11 @@ def setup():
     run(f"{PIP} install -r requirements.txt")
 
 def setup_cuda():
-    """Create venv and install with CUDA 12.4 GPU support."""
+    """Create venv and install with CUDA 12.8 GPU support (supports RTX 50-series Blackwell)."""
     os.makedirs(os.path.dirname(VENV_DIR), exist_ok=True)
     run(f"{sys.executable} -m venv {VENV_DIR}")
     run(f"{PYTHON} -m pip install --upgrade pip")
-    run(f"{PIP} install torch torchvision --index-url https://download.pytorch.org/whl/cu124")
+    run(f"{PIP} install torch torchvision --index-url https://download.pytorch.org/whl/cu128")
     run(f"{PIP} install -r requirements.txt")
     run(f'{PYTHON} -c "import torch; print(f\'CUDA: {{torch.cuda.is_available()}}, GPU: {{torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"NONE\"}}\')"')
 

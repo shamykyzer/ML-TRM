@@ -1,0 +1,131 @@
+ML-TRM Setup Guide
+===================
+Full setup from scratch for training TRM-Sudoku on Windows.
+
+1. PREREQUISITES
+----------------
+- Python 3.11+
+- NVIDIA GPU with CUDA support
+- Git
+
+2. CREATE VENV + INSTALL DEPENDENCIES (WITH CUDA)
+--------------------------------------------------
+    python run.py setup-cuda
+
+This creates a venv at ~/.venvs/ml-trm (short path to avoid Windows MAX_PATH issues),
+installs PyTorch with CUDA 12.8 (required for RTX 50-series Blackwell GPUs), then all
+other dependencies from requirements.txt.
+
+Note: RTX 50-series (5070, 5080, 5090) need CUDA 12.8 (cu128). Older CUDA versions
+(cu124) will fail with "no kernel image is available for execution on the device"
+because Blackwell uses compute capability sm_120.
+
+3. DOWNLOAD SUDOKU DATASET
+---------------------------
+    python run.py data-sudoku
+
+Downloads sapientinc/sudoku-extreme from HuggingFace Hub.
+Saves to data/sudoku-extreme-full/ (1K training puzzles, augmented on-the-fly).
+
+4. TRAIN
+--------
+    python run.py train-sudoku
+
+Config: configs/trm_sudoku.yaml
+- N_sup=16 (paper default, "Less is More" Jolicoeur-Martineau 2025)
+- batch_size=64 (fits N_sup=16 on 12GB GPUs like RTX 5070)
+- 500 epochs, seed is random each run (use --seed N to reproduce a specific run)
+
+To resume from checkpoint:
+    python run.py resume-sudoku
+
+To run everything in one command:
+    python run.py pipeline-sudoku
+
+5. AUTO-PUSH TRAINING LOGS TO GITHUB
+--------------------------------------
+In a SEPARATE terminal (Git Bash, not PowerShell):
+
+    cd "/c/Users/amm-alshamy/OneDrive - UWE Bristol/Documents/ML-TRM"
+    bash scripts/auto_push.sh
+
+If running from PowerShell:
+    & "C:\Users\amm-alshamy\AppData\Local\Programs\Git\bin\bash.exe" scripts/auto_push.sh
+
+This pushes CSV logs and JSON results every hour (NOT checkpoint .pt files).
+Press Ctrl+C to stop.
+
+6. HUGGINGFACE HUB CHECKPOINT SYNC
+------------------------------------
+Checkpoints are too large for Git. They sync to HuggingFace Hub instead.
+
+One-time login:
+    & "$env:USERPROFILE\.venvs\ml-trm\Scripts\hf.exe" auth login
+
+Checkpoints auto-upload during training when hf_repo_id is set in the config YAML:
+    hf_repo_id: shamykyzer/ml-trm-checkpoints
+
+The repo is created as PRIVATE automatically on first training run.
+
+Uploads happen at:
+- Every save_interval epochs (periodic checkpoint)
+- When a new best accuracy is reached (best.pt)
+- At the end of training (latest.pt)
+
+To download checkpoints on another machine:
+    hf download shamykyzer/ml-trm-checkpoints --local-dir models/sudoku
+
+7. BATCH SIZE GUIDELINES PER GPU
+----------------------------------
+GPU             VRAM    Sudoku (N_sup=16)   Maze
+RTX 3070        8 GB    32                  8
+RTX 4060        8 GB    32                  8
+RTX 4070        12 GB   64                  16
+RTX 5070        12 GB   64                  16
+RTX 5090        32 GB   256                 64
+L40S            48 GB   768                 128
+
+8. HOW HUGGINGFACE HUB CHECKPOINT SYNC WORKS
+----------------------------------------------
+Why use it?
+- Git is NOT suitable for large binary files (checkpoints are 50-100MB+). Pushing them
+  to GitHub bloats the repo history permanently and slows down cloning.
+- HuggingFace Hub is designed for ML model files. It uses LFS-like storage, supports
+  versioning, and handles large files efficiently.
+- Checkpoints upload automatically during training with no extra commands needed.
+
+How it works in the code:
+- trainer_trm.py imports HfApi from huggingface_hub
+- On trainer init, if hf_repo_id is set in config, it creates a private HF repo
+- Every time _save_checkpoint() runs, it uploads the .pt file to HF Hub right after
+  saving locally. Each upload is a separate commit, so you get full version history.
+- If the upload fails (e.g. no internet), training continues — it just prints a warning.
+
+What gets uploaded and when:
+- Every 25 epochs: epoch_25.pt, epoch_50.pt, etc. (periodic snapshots)
+- On new best accuracy: best.pt (overwrites previous best)
+- End of training: latest.pt (final state)
+
+How to use across machines:
+- Machine A (training): just set hf_repo_id in config and train. Uploads happen auto.
+- Machine B (resume): download checkpoints, then resume training:
+      hf download shamykyzer/ml-trm-checkpoints --local-dir models/sudoku
+      python run.py resume-sudoku
+
+How to disable:
+- Remove or leave hf_repo_id empty in the config YAML. Training works exactly the same,
+  just without uploading.
+
+Comparison with alternatives:
+- Git LFS: requires setup, charges for bandwidth, still bloats clone size
+- OneDrive/Google Drive: syncs everything including temp files, no version control
+- HF Hub: purpose-built for ML, free private repos, versioned, easy CLI download
+
+9. USEFUL COMMANDS
+-------------------
+    python run.py help              # list all available targets
+    python run.py train-sudoku      # train TRM on Sudoku
+    python run.py train-maze        # train TRM on Maze
+    python run.py eval-sudoku       # evaluate trained model
+    python run.py resume-sudoku     # resume from checkpoint
+    python run.py train-llm-all     # train all 4 LLM baselines

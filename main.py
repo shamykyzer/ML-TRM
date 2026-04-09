@@ -1,4 +1,5 @@
 import os
+import time
 
 from argdantic import ArgParser
 from pydantic import BaseModel
@@ -16,14 +17,17 @@ class RunConfig(BaseModel):
     mode: str = "train"  # train | eval | distill
     checkpoint: str = ""
     resume: str = ""  # path to checkpoint to resume training from
-    seed: int = 42
+    seed: int = -1  # -1 = random seed each run
 
 
 @cli.command(singleton=True)
 def main(cfg: RunConfig):
     config = load_config(cfg.config)
+    if cfg.seed < 0:
+        cfg.seed = int(time.time()) % (2**31)
     config.seed = cfg.seed
     apply_gpu_overrides(config)
+    print(f"[Seed] {cfg.seed}")
     set_seed(cfg.seed)
 
     if cfg.mode == "train":

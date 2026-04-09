@@ -22,6 +22,13 @@ try:
 except ImportError:
     WANDB_AVAILABLE = False
 
+try:
+    from huggingface_hub import HfApi
+
+    HF_AVAILABLE = True
+except ImportError:
+    HF_AVAILABLE = False
+
 
 class TRMTrainer:
     """Trainer for TRM models with deep supervision, ACT, EMA, and CodeCarbon."""
@@ -79,6 +86,15 @@ class TRMTrainer:
         os.makedirs(config.checkpoint_dir, exist_ok=True)
         os.makedirs(config.experiment_dir, exist_ok=True)
 
+        # HuggingFace Hub checkpoint sync
+        self.hf_repo_id = config.training.hf_repo_id if hasattr(config.training, "hf_repo_id") else ""
+        if self.hf_repo_id and HF_AVAILABLE:
+            self.hf_api = HfApi()
+            self.hf_api.create_repo(self.hf_repo_id, exist_ok=True, private=True)
+            print(f"[HF Hub] Syncing checkpoints to {self.hf_repo_id}")
+        else:
+            self.hf_api = None
+
         # Resume from checkpoint if provided
         if resume_checkpoint and os.path.isfile(resume_checkpoint):
             self._load_checkpoint(resume_checkpoint)
@@ -120,6 +136,14 @@ class TRMTrainer:
                 self.scheduler.step()
         print(f"Resumed at epoch {self.start_epoch}, step {self.global_step}, best_acc {self.best_acc:.4f}")
 
+    @staticmethod
+    def _fmt_time(seconds: float) -> str:
+        if seconds >= 86400:
+            return f"{seconds / 86400:.1f}d"
+        if seconds >= 3600:
+            return f"{seconds / 3600:.1f}h"
+        return f"{seconds / 60:.0f}m"
+
     def train(self) -> None:
         self._init_log()
         self.carbon.start()
@@ -127,62 +151,70 @@ class TRMTrainer:
 
         best_acc = self.best_acc
         epoch_times = []
-        eta_str = ""
-        for epoch in range(self.start_epoch, self.tc.epochs):
+        last_val = {}
+
+        # Single outer progress bar for all epochs
+        epoch_bar = tqdm(
+            range(self.start_epoch, self.tc.epochs),
+            desc="Training",
+            unit="ep",
+            dynamic_ncols=True,
+        )
+
+        for epoch in epoch_bar:
             epoch_start = time.time()
-            metrics = self._train_epoch(epoch, eta_str)
+            metrics = self._train_epoch(epoch)
             epoch_times.append(time.time() - epoch_start)
 
-            # Update ETA for next epoch's progress bar
+            # Rolling ETA from last 10 epochs
             recent = epoch_times[-10:]
-            avg_epoch_sec = sum(recent) / len(recent)
-            remaining_epochs = self.tc.epochs - (epoch + 1)
-            eta_sec = remaining_epochs * avg_epoch_sec
-            eta_hrs = eta_sec / 3600
-            if eta_hrs >= 24:
-                eta_str = f"{eta_hrs / 24:.1f}d"
-            else:
-                eta_str = f"{eta_hrs:.1f}h"
+            avg_sec = sum(recent) / len(recent)
+            eta_sec = (self.tc.epochs - (epoch + 1)) * avg_sec
+            elapsed = time.time() - t_start
+
+            # Update the single progress bar with live metrics
+            epoch_bar.set_postfix_str(
+                f"CE={metrics['ce_loss']:.3f}  "
+                f"Q={metrics['q_mean']:.3f}  "
+                f"Steps={metrics['steps_taken']:.0f}/{self.tc.N_sup}  "
+                f"Acc={metrics['puzzle_acc']:.3f}  "
+                f"Val={'%.1f%%' % (last_val['puzzle_acc'] * 100) if last_val else '—'}  "
+                f"Best={'%.1f%%' % (best_acc * 100)}  "
+                f"ETA={self._fmt_time(eta_sec)}"
+            )
 
             if (epoch + 1) % self.tc.log_interval == 0:
-                val_metrics = self.evaluate()
-                elapsed = (time.time() - t_start) / 60.0
-                # ETA based on rolling average of last 10 epochs
-                recent = epoch_times[-10:]
-                avg_epoch_sec = sum(recent) / len(recent)
-                remaining_epochs = self.tc.epochs - (epoch + 1)
-                eta_sec = remaining_epochs * avg_epoch_sec
-                eta_hrs = eta_sec / 3600
-                if eta_hrs >= 24:
-                    eta_str = f"{eta_hrs / 24:.1f}d"
-                else:
-                    eta_str = f"{eta_hrs:.1f}h"
-                tqdm.write(
-                    f"Epoch {epoch + 1}/{self.tc.epochs} | "
-                    f"CE: {metrics['ce_loss']:.4f} | "
-                    f"Q: {metrics['q_mean']:.3f} | "
-                    f"Steps: {metrics['steps_taken']:.1f} | "
-                    f"Val Acc: {val_metrics['puzzle_acc']:.4f} | "
-                    f"Time: {elapsed:.0f}min | "
-                    f"ETA: {eta_str}"
-                )
+                last_val = self.evaluate()
 
                 if self.tc.use_wandb and WANDB_AVAILABLE:
-                    wandb.log({**metrics, **{f"val_{k}": v for k, v in val_metrics.items()}})
+                    wandb.log({**metrics, **{f"val_{k}": v for k, v in last_val.items()}})
 
-                if val_metrics["puzzle_acc"] > best_acc:
-                    best_acc = val_metrics["puzzle_acc"]
+                new_best = ""
+                if last_val["puzzle_acc"] > best_acc:
+                    best_acc = last_val["puzzle_acc"]
                     self._save_checkpoint(epoch, "best.pt", best_acc)
+                    new_best = " NEW BEST!"
+
+                tqdm.write(
+                    f"  [{epoch + 1}/{self.tc.epochs}] "
+                    f"cell={last_val['cell_acc']:.1%}  "
+                    f"puzzle={last_val['puzzle_acc']:.1%}  "
+                    f"best={best_acc:.1%}  "
+                    f"CE={metrics['ce_loss']:.4f}  "
+                    f"elapsed={self._fmt_time(elapsed)}"
+                    f"{new_best}"
+                )
 
                 self._append_log([
                     epoch + 1, f"{metrics['ce_loss']:.4f}", f"{metrics['q_mean']:.3f}",
-                    f"{metrics['steps_taken']:.1f}", f"{val_metrics['cell_acc']:.4f}",
-                    f"{val_metrics['puzzle_acc']:.4f}", f"{best_acc:.4f}", f"{elapsed:.1f}",
+                    f"{metrics['steps_taken']:.1f}", f"{last_val['cell_acc']:.4f}",
+                    f"{last_val['puzzle_acc']:.4f}", f"{best_acc:.4f}", f"{elapsed / 60:.1f}",
                 ])
 
             if (epoch + 1) % self.tc.save_interval == 0:
                 self._save_checkpoint(epoch, f"epoch_{epoch + 1}.pt", best_acc)
 
+        epoch_bar.close()
         self._save_checkpoint(self.tc.epochs - 1, "latest.pt", best_acc)
         emissions = self.carbon.stop()
 
@@ -190,18 +222,15 @@ class TRMTrainer:
         with open(results_path, "w") as f:
             json.dump({"best_puzzle_acc": best_acc, "emissions": emissions}, f, indent=2)
 
-    def _train_epoch(self, epoch: int, eta_str: str = "") -> dict:
+    def _train_epoch(self, epoch: int) -> dict:
         self.model.train()
         epoch_metrics = {
             "ce_loss": 0.0, "q_loss": 0.0, "q_mean": 0.0,
             "steps_taken": 0.0, "puzzle_acc": 0.0,
         }
         n_batches = 0
-        desc = f"Epoch {epoch + 1}/{self.tc.epochs}"
-        if eta_str:
-            desc += f" [ETA {eta_str}]"
-        pbar = tqdm(self.train_loader, desc=desc, leave=True)
-        for inputs, labels in pbar:
+
+        for inputs, labels in self.train_loader:
             inputs = inputs.to(self.device)
             labels = labels.to(self.device)
 
@@ -226,13 +255,6 @@ class TRMTrainer:
             for k in epoch_metrics:
                 epoch_metrics[k] += metrics[k]
             n_batches += 1
-
-            pbar.set_postfix(
-                ce=f"{metrics['ce_loss']:.3f}",
-                q=f"{metrics['q_mean']:.3f}",
-                steps=f"{metrics['steps_taken']:.0f}/16",
-                acc=f"{metrics['puzzle_acc']:.3f}",
-            )
 
         return {k: v / max(1, n_batches) for k, v in epoch_metrics.items()}
 
@@ -297,3 +319,13 @@ class TRMTrainer:
             },
             path,
         )
+        if self.hf_api:
+            try:
+                self.hf_api.upload_file(
+                    path_or_fileobj=path,
+                    path_in_repo=f"{self.config.checkpoint_dir}/{filename}",
+                    repo_id=self.hf_repo_id,
+                    commit_message=f"checkpoint epoch {epoch + 1} (acc={best_acc:.4f})",
+                )
+            except Exception as e:
+                tqdm.write(f"[HF Hub] Upload failed: {e}")

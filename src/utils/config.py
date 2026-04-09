@@ -64,6 +64,9 @@ class TrainingConfig(BaseModel):
     log_interval: int = 50
     save_interval: int = 500
 
+    # HuggingFace Hub checkpoint sync (empty string = disabled)
+    hf_repo_id: str = ""
+
 
 class DataConfig(BaseModel):
     dataset: str = "sudoku"
