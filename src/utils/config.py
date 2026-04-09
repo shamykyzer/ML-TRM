@@ -8,6 +8,8 @@ from pydantic import BaseModel
 class ModelType(str, Enum):
     TRM_SUDOKU = "trm_sudoku"
     TRM_MAZE = "trm_maze"
+    TRM_OFFICIAL_SUDOKU = "trm_official_sudoku"
+    TRM_OFFICIAL_MAZE = "trm_official_maze"
     LLM_FINETUNE = "llm_finetune"
     LLM_DISTILL = "llm_distill"
 
@@ -21,6 +23,19 @@ class ModelConfig(BaseModel):
     seq_len: int = 81
     num_classes: int = 11
     dropout: float = 0.0
+
+    # Official TRM architecture
+    H_cycles: int = 3
+    L_cycles: int = 4
+    L_layers: int = 2
+    num_task_types: int = 2
+    task_emb_len: int = 16
+    task_emb_ndim: int = 512
+    halt_max_steps: int = 16
+    halt_exploration_prob: float = 0.1
+    no_ACT_continue: bool = False
+    forward_dtype: str = "bfloat16"
+    mlp_t: bool = False
 
     # LLM-specific
     llm_name: str = "gpt2"
@@ -66,6 +81,14 @@ class TrainingConfig(BaseModel):
 
     # HuggingFace Hub checkpoint sync (empty string = disabled)
     hf_repo_id: str = ""
+
+    # Official TRM optimizer
+    optimizer: str = "adamw"  # "adamw" or "adam_atan2"
+    task_emb_lr: float = 0.01
+    task_emb_weight_decay: float = 0.1
+
+    # Task ID for collate
+    task_id: int = 0  # 0=sudoku, 1=maze
 
 
 class DataConfig(BaseModel):
