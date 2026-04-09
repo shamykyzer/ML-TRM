@@ -1,1 +1,2 @@
 epoch,ce_loss,q_mean,steps_taken,val_cell_acc,val_puzzle_acc,best_puzzle_acc,elapsed_min
+150,2.2005,0.000,16.0,0.1114,0.0000,0.0000,2332.9
