@@ -32,3 +32,5 @@ peft>=0.10.0            # LoRA / QLoRA for LLM fine-tuning
 bitsandbytes>=0.43.0    # 4-bit quantization for QLoRA
 pyyaml>=6.0             # YAML config loading
 
+adam-atan2>=0.1.0         # arctan-bounded optimizer (official TRM recipe)
+
