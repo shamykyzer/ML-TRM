@@ -132,6 +132,70 @@ def evaluate_standard(
     }
 
 
+def evaluate_official(
+    model: nn.Module,
+    test_loader: DataLoader,
+    config: ExperimentConfig,
+    ema: EMA = None,
+) -> dict:
+    """Evaluate an official TRM model with full ACT steps."""
+    device = torch.device(config.device if torch.cuda.is_available() else "cpu")
+    model.to(device)
+
+    carbon = CarbonTracker(
+        f"{config.model.model_type.value}_inference",
+        output_dir=config.experiment_dir,
+    )
+
+    if ema is not None:
+        ema.apply_shadow()
+
+    model.eval()
+    carbon.start()
+
+    total_cell_correct = 0
+    total_cells = 0
+    total_puzzle_correct = 0
+    total_puzzles = 0
+    total_steps = 0
+    n_samples = 0
+
+    with torch.no_grad():
+        for batch in tqdm(test_loader, desc="Evaluating"):
+            batch = {k: v.to(device) for k, v in batch.items()}
+            B = batch["inputs"].shape[0]
+
+            carry = model.initial_carry(batch)
+
+            for _step in range(config.model.halt_max_steps):
+                carry, outputs = model(carry=carry, batch=batch)
+
+            preds = outputs["logits"].argmax(-1)
+            labels = carry.current_data["labels"]
+            mask = labels != -100
+
+            total_cell_correct += ((preds == labels) & mask).sum().item()
+            total_cells += mask.sum().item()
+
+            puzzle_correct = ((preds == labels) | ~mask).all(dim=-1)
+            total_puzzle_correct += puzzle_correct.sum().item()
+            total_puzzles += B
+            total_steps += carry.steps.sum().item()
+            n_samples += B
+
+    emissions = carbon.stop()
+
+    if ema is not None:
+        ema.restore()
+
+    return {
+        "cell_accuracy": total_cell_correct / max(1, total_cells),
+        "puzzle_accuracy": total_puzzle_correct / max(1, total_puzzles),
+        "avg_act_steps": total_steps / max(1, n_samples),
+        "inference_emissions": emissions,
+    }
+
+
 def load_and_evaluate(
     checkpoint_path: str,
     test_loader: DataLoader,
@@ -170,6 +234,38 @@ def load_and_evaluate(
             ema.load_state_dict(checkpoint["ema_state_dict"])
 
         results = evaluate_trm(model, test_loader, config, ema=ema)
+
+    elif model_type in (ModelType.TRM_OFFICIAL_SUDOKU, ModelType.TRM_OFFICIAL_MAZE):
+        from src.models.trm_official import TRMOfficial
+
+        model_config = {
+            "batch_size": config.training.batch_size,
+            "seq_len": config.model.seq_len,
+            "vocab_size": config.model.vocab_size,
+            "num_task_types": config.model.num_task_types,
+            "task_emb_ndim": config.model.task_emb_ndim,
+            "task_emb_len": config.model.task_emb_len,
+            "hidden_size": config.model.d_model,
+            "expansion": config.model.ff_hidden / config.model.d_model,
+            "num_heads": config.model.n_heads,
+            "L_layers": config.model.L_layers,
+            "H_cycles": config.model.H_cycles,
+            "L_cycles": config.model.L_cycles,
+            "halt_max_steps": config.model.halt_max_steps,
+            "halt_exploration_prob": config.model.halt_exploration_prob,
+            "no_ACT_continue": config.model.no_ACT_continue,
+            "forward_dtype": config.model.forward_dtype,
+            "mlp_t": config.model.mlp_t,
+        }
+        model = TRMOfficial(model_config)
+        model.load_state_dict(checkpoint["model_state_dict"])
+
+        ema = None
+        if "ema_state_dict" in checkpoint:
+            ema = EMA(model, decay=config.training.ema_decay)
+            ema.load_state_dict(checkpoint["ema_state_dict"])
+
+        results = evaluate_official(model, test_loader, config, ema=ema)
 
     elif model_type == ModelType.LLM_DISTILL:
         from src.models.distilled_llm import DistilledLLM
