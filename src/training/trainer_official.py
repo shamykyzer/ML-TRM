@@ -94,8 +94,10 @@ class OfficialTRMTrainer:
         self.tc = config.training
         self.device = torch.device(config.device if torch.cuda.is_available() else "cpu")
 
-        self.model.to(self.device)
-        self.loss_head.to(self.device)
+        # Native bfloat16 forward — no GradScaler needed (bfloat16 has float32's exponent range)
+        self.forward_dtype = getattr(torch, config.model.forward_dtype, torch.bfloat16)
+        self.model.to(device=self.device, dtype=self.forward_dtype)
+        self.loss_head.to(device=self.device, dtype=self.forward_dtype)
 
         self.optimizer = _build_optimizer(model, config)
 
