@@ -18,7 +18,7 @@ training:
   ema_decay: 0.999
   n_latent: 6           # inner recursion steps
   T_deep: 3             # outer recursion passes
-  N_sup: 16             # paper default — full deep supervision
+  N_sup: 8              # max that fits on 8GB RTX 4060 (paper uses 16 on 48GB L40S)
   act_threshold: 0.5
   max_grad_norm: 1.0
   use_wandb: false

@@ -19,7 +19,7 @@ GPU_PROFILES = {
     },
     "RTX 4060": {
         "vram_gb": 8,
-        "sudoku": {"batch_size": 32},  # N_sup=16 needs smaller batch on 8GB
+        "sudoku": {"batch_size": 48},  # N_sup=8 fits comfortably on 8GB
         "maze":   {"batch_size": 8},
     },
     # 12GB VRAM
