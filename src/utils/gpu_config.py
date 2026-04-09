@@ -30,7 +30,7 @@ GPU_PROFILES = {
     },
     "RTX 5070": {
         "vram_gb": 12,
-        "sudoku": {"batch_size": 128},
+        "sudoku": {"batch_size": 64},   # N_sup=16 needs smaller batch on 12GB
         "maze":   {"batch_size": 16},
     },
     # 16GB VRAM

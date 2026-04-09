@@ -153,17 +153,19 @@ class TRMTrainer:
         epoch_times = []
         last_val = {}
 
-        # Single outer progress bar for all epochs
-        epoch_bar = tqdm(
-            range(self.start_epoch, self.tc.epochs),
+        # Epoch-level progress bar, updated per batch within each epoch
+        total_epochs = self.tc.epochs - self.start_epoch
+        step_bar = tqdm(
+            total=total_epochs,
             desc="Training",
             unit="ep",
             dynamic_ncols=True,
         )
 
-        for epoch in epoch_bar:
+        for epoch in range(self.start_epoch, self.tc.epochs):
             epoch_start = time.time()
-            metrics = self._train_epoch(epoch)
+            metrics = self._train_epoch(epoch, step_bar)
+            step_bar.update(1)
             epoch_times.append(time.time() - epoch_start)
 
             # Rolling ETA from last 10 epochs
@@ -172,12 +174,12 @@ class TRMTrainer:
             eta_sec = (self.tc.epochs - (epoch + 1)) * avg_sec
             elapsed = time.time() - t_start
 
-            # Update the single progress bar with live metrics
-            epoch_bar.set_postfix_str(
+            # End-of-epoch summary on the bar
+            step_bar.set_description_str(f"Training Ep {epoch + 1}/{self.tc.epochs}")
+            step_bar.set_postfix_str(
                 f"CE={metrics['ce_loss']:.3f}  "
                 f"Q={metrics['q_mean']:.3f}  "
-                f"Steps={metrics['steps_taken']:.0f}/{self.tc.N_sup}  "
-                f"Acc={metrics['puzzle_acc']:.3f}  "
+                f"Sup={metrics['steps_taken']:.0f}/{self.tc.N_sup}  "
                 f"Val={'%.1f%%' % (last_val['puzzle_acc'] * 100) if last_val else '—'}  "
                 f"Best={'%.1f%%' % (best_acc * 100)}  "
                 f"ETA={self._fmt_time(eta_sec)}"
@@ -214,7 +216,7 @@ class TRMTrainer:
             if (epoch + 1) % self.tc.save_interval == 0:
                 self._save_checkpoint(epoch, f"epoch_{epoch + 1}.pt", best_acc)
 
-        epoch_bar.close()
+        step_bar.close()
         self._save_checkpoint(self.tc.epochs - 1, "latest.pt", best_acc)
         emissions = self.carbon.stop()
 
@@ -222,7 +224,7 @@ class TRMTrainer:
         with open(results_path, "w") as f:
             json.dump({"best_puzzle_acc": best_acc, "emissions": emissions}, f, indent=2)
 
-    def _train_epoch(self, epoch: int) -> dict:
+    def _train_epoch(self, epoch: int, step_bar: tqdm) -> dict:
         self.model.train()
         epoch_metrics = {
             "ce_loss": 0.0, "q_loss": 0.0, "q_mean": 0.0,
@@ -255,6 +257,16 @@ class TRMTrainer:
             for k in epoch_metrics:
                 epoch_metrics[k] += metrics[k]
             n_batches += 1
+
+            # Update metrics every batch (bar advances per epoch, not per batch)
+            total_batches = len(self.train_loader)
+            step_bar.set_description_str(f"Training Ep {epoch + 1}/{self.tc.epochs}")
+            step_bar.set_postfix_str(
+                f"Step={n_batches}/{total_batches}  "
+                f"CE={metrics['ce_loss']:.3f}  "
+                f"Q={metrics['q_mean']:.3f}  "
+                f"Sup={metrics['steps_taken']:.0f}/{self.tc.N_sup}"
+            )
 
         return {k: v / max(1, n_batches) for k, v in epoch_metrics.items()}
 
@@ -314,6 +326,7 @@ class TRMTrainer:
                 "optimizer_state_dict": self.optimizer.state_dict(),
                 "ema_state_dict": self.ema.state_dict(),
                 "config": self.config.model_dump(),
+                "seed": self.config.seed,
                 "global_step": self.global_step,
                 "best_puzzle_acc": best_acc,
             },
