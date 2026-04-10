@@ -11,6 +11,8 @@ Key differences from trainer_trm.py:
 import csv
 import json
 import os
+import re
+import sys
 import time
 import warnings
 
@@ -18,6 +20,44 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+
+
+class _TqdmNewlineFile:
+    """File wrapper that converts tqdm's in-place refresh into a new line.
+
+    tqdm refreshes progress bars by writing "\\r<bar>" — the carriage return
+    moves the cursor back so the next write overwrites the same terminal
+    line ("one slot, updating"). This wrapper strips the carriage return
+    and any ANSI cursor-movement escapes, then appends a newline, so every
+    refresh emits a fresh line instead of overwriting.
+
+    Result: append-only progress log that survives in terminal scrollback
+    and captures cleanly when stdout is piped to a file or tailed by a
+    log collector. Trade-off: bars no longer share a single row, so
+    nested-bar `position=` layouts must be dropped (the cursor-up escapes
+    they rely on are stripped by this wrapper).
+    """
+
+    # Matches CSI cursor-up / cursor-next-line sequences that nested tqdm
+    # bars emit to jump between rows. We strip them because in newline mode
+    # they'd either leak as garbage or do nothing meaningful.
+    _ANSI_CURSOR_MOVE = re.compile(r"\x1b\[\d*[AFJK]")
+
+    def __init__(self, fp):
+        self.fp = fp
+
+    def write(self, s: str) -> None:
+        if not s:
+            return
+        s = s.lstrip("\r")
+        s = self._ANSI_CURSOR_MOVE.sub("", s)
+        s = s.rstrip()
+        if not s:
+            return
+        self.fp.write(s + "\n")
+
+    def flush(self) -> None:
+        self.fp.flush()
 
 from src.models.losses_official import ACTLossHead
 from src.training.carbon_tracker import CarbonTracker
@@ -210,9 +250,10 @@ class OfficialTRMTrainer:
             desc="epochs ",
             initial=self.start_epoch,
             total=self.tc.epochs,
-            position=0,
             leave=True,
             bar_format=self.EPOCH_BAR_FORMAT,
+            file=_TqdmNewlineFile(sys.stderr),
+            mininterval=0,
         )
         for epoch in epoch_iter:
             # MUST be the first line: resets the lazy checkpoint payload per
@@ -343,8 +384,9 @@ class OfficialTRMTrainer:
             self.train_loader,
             desc=f"train e{epoch + 1} ",
             bar_format=self.BAR_FORMAT,
-            position=1,
             leave=False,
+            file=_TqdmNewlineFile(sys.stderr),
+            mininterval=1.0,
         )
         for batch in pbar:
             batch = {k: v.to(self.device) for k, v in batch.items()}
@@ -420,8 +462,9 @@ class OfficialTRMTrainer:
             self.val_loader,
             desc="eval ",
             bar_format=self.BAR_FORMAT,
-            position=1,
             leave=False,
+            file=_TqdmNewlineFile(sys.stderr),
+            mininterval=2.0,
         )
         for batch in pbar:
             batch = {k: v.to(self.device) for k, v in batch.items()}
