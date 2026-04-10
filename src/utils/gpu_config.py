@@ -4,6 +4,8 @@ import platform
 import torch
 import yaml
 
+from src.utils.config import ExperimentConfig
+
 
 # Optimal settings per GPU for TRM training.
 # batch_size = max that fits in VRAM with 16 deep supervision steps + AMP
@@ -101,7 +103,7 @@ def get_num_workers() -> int:
     return 4
 
 
-def apply_gpu_overrides(config) -> None:
+def apply_gpu_overrides(config: ExperimentConfig) -> None:
     """Apply GPU-optimal batch_size and num_workers to an ExperimentConfig in-place."""
     gpu_profile = detect_gpu()
     task = config.data.dataset if hasattr(config.data, "dataset") else "sudoku"
