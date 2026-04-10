@@ -194,7 +194,8 @@ class OfficialTRMTrainer:
             return f"{seconds / 3600:.1f}h"
         return f"{seconds / 60:.0f}m"
 
-    BAR_FORMAT = "  {n_fmt}/{total_fmt} |{bar}| [{elapsed}<{remaining}, {rate_fmt}]"
+    BAR_FORMAT = "  {desc}{n_fmt}/{total_fmt} |{bar}| [{elapsed}<{remaining}, {rate_fmt}] {postfix}"
+    EPOCH_BAR_FORMAT = "{desc}{n_fmt}/{total_fmt} |{bar}| [{elapsed}<{remaining}] {postfix}"
 
     def train(self) -> None:
         self._init_log()
@@ -204,7 +205,16 @@ class OfficialTRMTrainer:
         epoch_times = []
         last_val = {}
 
-        for epoch in range(self.start_epoch, self.tc.epochs):
+        epoch_iter = tqdm(
+            range(self.start_epoch, self.tc.epochs),
+            desc="epochs ",
+            initial=self.start_epoch,
+            total=self.tc.epochs,
+            position=0,
+            leave=True,
+            bar_format=self.EPOCH_BAR_FORMAT,
+        )
+        for epoch in epoch_iter:
             # MUST be the first line: resets the lazy checkpoint payload per
             # epoch. If we skipped this and a later epoch's save_interval fired
             # without the log_interval branch having rebuilt the payload, we'd
@@ -220,6 +230,12 @@ class OfficialTRMTrainer:
             avg_sec = sum(recent) / len(recent)
             eta_sec = (self.tc.epochs - (epoch + 1)) * avg_sec
             elapsed = time.time() - t_start
+
+            epoch_iter.set_postfix(
+                step=self.global_step,
+                loss=f"{metrics['lm_loss']:.3f}",
+                best=f"{self.best_acc:.3f}",
+            )
 
             if self.use_wandb:
                 wandb.log({f"train/{k}": v for k, v in metrics.items()}, step=epoch + 1)
@@ -240,7 +256,7 @@ class OfficialTRMTrainer:
                         self._log_best_to_wandb(epoch)
                     new_best = " NEW BEST!"
 
-                print(
+                tqdm.write(
                     f"Epoch {epoch + 1}/{self.tc.epochs} - "
                     f"lm_loss: {metrics['lm_loss']:.4f}  "
                     f"cell_acc: {last_val['cell_acc']:.4f}  "
@@ -304,7 +320,14 @@ class OfficialTRMTrainer:
         totals = {}
         n_batches = 0
 
-        for batch in tqdm(self.train_loader, bar_format=self.BAR_FORMAT):
+        pbar = tqdm(
+            self.train_loader,
+            desc=f"train e{epoch + 1} ",
+            bar_format=self.BAR_FORMAT,
+            position=1,
+            leave=False,
+        )
+        for batch in pbar:
             batch = {k: v.to(self.device) for k, v in batch.items()}
 
             carry = self.loss_head.initial_carry(batch)
@@ -351,6 +374,12 @@ class OfficialTRMTrainer:
                 totals[k] = totals.get(k, 0) + v
             n_batches += 1
 
+            pbar.set_postfix(
+                step=self.global_step,
+                act=f"{normalized['avg_steps']:.1f}",
+                loss=f"{normalized['lm_loss']:.3f}",
+            )
+
         return {k: v / max(1, n_batches) for k, v in totals.items()}
 
     @weave_op()
@@ -368,7 +397,14 @@ class OfficialTRMTrainer:
         total_q_halt_correct = 0
         n_samples = 0
 
-        for batch in self.val_loader:
+        pbar = tqdm(
+            self.val_loader,
+            desc="eval ",
+            bar_format=self.BAR_FORMAT,
+            position=1,
+            leave=False,
+        )
+        for batch in pbar:
             batch = {k: v.to(self.device) for k, v in batch.items()}
             B = batch["inputs"].shape[0]
 
@@ -397,6 +433,11 @@ class OfficialTRMTrainer:
             # Q-halt accuracy
             q_halt_correct = (_outputs["q_halt_logits"] >= 0) == puzzle_correct
             total_q_halt_correct += q_halt_correct.sum().item()
+
+            pbar.set_postfix(
+                cell=f"{total_cell_correct / max(1, total_cells):.3f}",
+                puzzle=f"{total_puzzle_correct / max(1, total_puzzles):.3f}",
+            )
 
         self.ema.restore()
 
