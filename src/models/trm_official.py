@@ -226,9 +226,10 @@ class TRMInner(nn.Module):
 
     def empty_carry(self, batch_size: int) -> InnerCarry:
         total_len = self.config.seq_len + self.task_emb_len
+        device = self.H_init.device
         return InnerCarry(
-            z_H=torch.empty(batch_size, total_len, self.config.hidden_size, dtype=self.forward_dtype),
-            z_L=torch.empty(batch_size, total_len, self.config.hidden_size, dtype=self.forward_dtype),
+            z_H=torch.empty(batch_size, total_len, self.config.hidden_size, dtype=self.forward_dtype, device=device),
+            z_L=torch.empty(batch_size, total_len, self.config.hidden_size, dtype=self.forward_dtype, device=device),
         )
 
     def reset_carry(self, reset_flag: torch.Tensor, carry: InnerCarry) -> InnerCarry:
@@ -270,9 +271,12 @@ class TRMInner(nn.Module):
 class TRMOfficial(nn.Module):
     """ACT wrapper: manages carry state, halting decisions, and Q-learning exploration."""
 
-    def __init__(self, config_dict: dict):
+    def __init__(self, config_dict):
         super().__init__()
-        self.config = TRMConfig(**config_dict)
+        if isinstance(config_dict, TRMConfig):
+            self.config = config_dict
+        else:
+            self.config = TRMConfig(**config_dict)
         self.inner = TRMInner(self.config)
 
     @property

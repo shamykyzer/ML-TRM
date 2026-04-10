@@ -28,8 +28,12 @@ class CarbonTracker:
 
     def stop(self) -> dict:
         self._emissions = self.tracker.stop()
+        scheduler = getattr(self.tracker, "_scheduler", None)
+        duration = getattr(scheduler, "duration", 0) if scheduler is not None else 0
+        total_energy = getattr(self.tracker, "_total_energy", None)
+        energy_kwh = getattr(total_energy, "kWh", 0) if total_energy is not None else 0
         return {
             "emissions_kg": self._emissions,
-            "duration_s": self.tracker._scheduler.duration if hasattr(self.tracker, '_scheduler') else 0,
-            "energy_kwh": self.tracker._total_energy.kWh if hasattr(self.tracker, '_total_energy') else 0,
+            "duration_s": duration,
+            "energy_kwh": energy_kwh,
         }
