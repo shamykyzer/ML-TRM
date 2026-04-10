@@ -55,19 +55,26 @@ def init_wandb(config: ExperimentConfig) -> bool:
         print("[W&B] Fix: pip install wandb")
         return False
 
-    # Auth check: WANDB_API_KEY env var OR existing ~/.netrc from `wandb login`
-    netrc_path = os.path.expanduser("~/.netrc")
+    # Auth check: WANDB_API_KEY env var OR a netrc file with wandb creds.
+    # On Windows, the wandb CLI writes ~/_netrc (underscore) rather than
+    # ~/.netrc, so we check both filenames regardless of platform.
     has_netrc_auth = False
-    if os.path.exists(netrc_path):
+    home = os.path.expanduser("~")
+    for name in (".netrc", "_netrc"):
+        path = os.path.join(home, name)
+        if not os.path.exists(path):
+            continue
         try:
-            with open(netrc_path) as f:
-                has_netrc_auth = "api.wandb.ai" in f.read()
+            with open(path) as f:
+                if "api.wandb.ai" in f.read():
+                    has_netrc_auth = True
+                    break
         except OSError:
-            has_netrc_auth = False
+            continue
 
     if not (os.getenv("WANDB_API_KEY") or has_netrc_auth):
-        print("[W&B] use_wandb=true but no WANDB_API_KEY set and no ~/.netrc auth — disabling wandb.")
-        print("[W&B] Fix: run `wandb login` or set WANDB_API_KEY in .env")
+        print("[W&B] use_wandb=true but no WANDB_API_KEY set and no netrc auth — disabling wandb.")
+        print("[W&B] Fix: run `wandb login` (writes ~/.netrc or ~/_netrc) or set WANDB_API_KEY in .env")
         return False
 
     hostname = socket.gethostname()
