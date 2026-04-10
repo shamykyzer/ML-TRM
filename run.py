@@ -29,7 +29,7 @@ else:
     PIP = os.path.join(VENV_DIR, "bin", "pip")
 
 
-def run(cmd, cwd=None):
+def run(cmd: str, cwd: str | None = None) -> None:
     """Run a command, stream output, abort on failure."""
     if platform.system() == "Windows":
         # Quote known executables so shell=True works with spaces in paths.

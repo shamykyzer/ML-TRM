@@ -112,9 +112,9 @@ def convert_subset(set_name: str, config: DataProcessConfig):
         results["group_indices"].append(puzzle_id)
         
     # To Numpy
-    def _seq_to_numpy(seq):
+    def _seq_to_numpy(seq: list[np.ndarray]) -> np.ndarray:
         arr = np.concatenate(seq).reshape(len(seq), -1)
-        
+
         assert np.all((arr >= 0) & (arr <= 9))
         return arr + 1
     

@@ -86,9 +86,9 @@ def convert_subset(set_name: str, config: DataProcessConfig):
     char2id[np.array(list(map(ord, CHARSET)))] = np.arange(len(CHARSET)) + 1
 
     # To Numpy
-    def _seq_to_numpy(seq):
+    def _seq_to_numpy(seq: list[np.ndarray]) -> np.ndarray:
         arr = np.vstack([char2id[s.reshape(-1)] for s in seq])
-        
+
         return arr
     
     results = {
