@@ -210,6 +210,7 @@ class OfficialTRMTrainer:
             # without the log_interval branch having rebuilt the payload, we'd
             # silently write a stale state_dict from an earlier epoch.
             payload: dict | None = None
+            slim: dict | None = None  # model+EMA only — for best.pt + milestones
 
             epoch_start = time.time()
             metrics = self._train_epoch(epoch)
@@ -233,7 +234,8 @@ class OfficialTRMTrainer:
                 if last_val["puzzle_acc"] > self.best_acc:
                     self.best_acc = last_val["puzzle_acc"]
                     payload = payload or self._checkpoint_payload(epoch)
-                    self._save_checkpoint("best.pt", payload)
+                    slim = slim or {k: v for k, v in payload.items() if k != "optimizer_state_dict"}
+                    self._save_checkpoint("best.pt", slim)
                     if self.use_wandb and self.tc.wandb_best_artifact:
                         self._log_best_to_wandb(epoch)
                     new_best = " NEW BEST!"
@@ -281,7 +283,8 @@ class OfficialTRMTrainer:
             pct = self.milestone_epochs.get(epoch + 1) if self.milestone_epochs else None
             if pct is not None:
                 payload = payload or self._checkpoint_payload(epoch)
-                self._save_milestone_checkpoint(pct, payload)
+                slim = slim or {k: v for k, v in payload.items() if k != "optimizer_state_dict"}
+                self._save_milestone_checkpoint(pct, slim)
 
         final_payload = self._checkpoint_payload(self.tc.epochs - 1)
         self._save_checkpoint("latest.pt", final_payload)
@@ -433,6 +436,7 @@ class OfficialTRMTrainer:
 
     def _save_checkpoint(self, filename: str, payload: dict) -> None:
         path = os.path.join(self.config.checkpoint_dir, filename)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         if not self._safe_torch_save(payload, path, "checkpoint"):
             return
         if self.hf_api:
@@ -475,14 +479,45 @@ class OfficialTRMTrainer:
                 except OSError as e:
                     tqdm.write(f"[rolling] Delete failed for {old}: {e}")
 
-    def _save_milestone_checkpoint(self, pct: int, payload: dict) -> None:
-        """Save a fixed-fraction training milestone (idempotent, never rotated)."""
-        filename = f"milestone_{pct:02d}pct.pt"
+    def _save_milestone_checkpoint(self, pct: int, payload_slim: dict) -> None:
+        """Save a fixed-fraction thesis milestone with HF Hub + wandb mirror.
+
+        payload_slim omits optimizer state (decision 6D) — milestones are for
+        analysis/inference, not resume. Resume from epoch_N.pt or latest.pt.
+
+        Idempotent: if the local file already exists (resume past milestone
+        epoch, or a re-run that reached the same epoch), this is a no-op —
+        no duplicate HF commits or wandb artifact versions.
+        """
+        dataset = self.config.data.dataset
+        epoch_num = payload_slim["epoch"] + 1
+        filename = f"snapshots_for_thesis/{dataset}_milestone_{pct:02d}pct_epoch{epoch_num}.pt"
         path = os.path.join(self.config.checkpoint_dir, filename)
+
         if os.path.isfile(path):
-            return  # already saved on a prior run — resume-safe
-        if self._safe_torch_save(payload, path, "milestone"):
-            tqdm.write(f"  [milestone] saved {filename} at epoch {payload['epoch'] + 1}")
+            return
+
+        # Local save + HF Hub upload (shared helper; creates subdir via _save_checkpoint)
+        self._save_checkpoint(filename, payload_slim)
+        tqdm.write(f"  [milestone] saved {filename}")
+
+        # wandb Artifact mirror — decision 3D
+        if self.use_wandb and os.path.isfile(path):
+            try:
+                artifact = wandb.Artifact(
+                    name=f"{dataset}-milestone-{pct:02d}pct",
+                    type="model",
+                    metadata={
+                        "puzzle_acc": float(self.best_acc),
+                        "epoch": epoch_num,
+                        "global_step": self.global_step,
+                        "pct": pct,
+                    },
+                )
+                artifact.add_file(path)
+                wandb.log_artifact(artifact, aliases=[f"milestone_{pct:02d}pct"])
+            except Exception as e:
+                tqdm.write(f"[wandb] Milestone artifact upload failed: {e}")
 
     def _log_best_to_wandb(self, epoch: int) -> None:
         """Upload best.pt as a versioned wandb Artifact (non-blocking background sync)."""

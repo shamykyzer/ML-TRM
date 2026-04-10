@@ -39,7 +39,8 @@ training:
   wandb_project: TRM
   wandb_entity: ""                    # set via TRM_WANDB_ENTITY in .env
   log_interval: 50
-  save_interval: 500
+  save_interval: 50
+  hf_repo_id: ""                      # set via TRM_HF_REPO_ID in .env
 
   # Crash-recovery rolling backup — set via TRM_ROLLING_CHECKPOINT_DIR in .env
   # (blank = disabled; example: D:/ml-trm-checkpoints/maze-official)
@@ -51,7 +52,7 @@ training:
   milestone_checkpoints: true
 
   # Upload best.pt as a versioned wandb Artifact on every new best
-  wandb_best_artifact: true
+  wandb_best_artifact: false
 
 data:
   dataset: maze
@@ -60,5 +61,5 @@ data:
 
 seed: 42
 device: cuda
-checkpoint_dir: models/maze-official
+checkpoint_dir: "C:/TRM checkpoints/maze-official"
 experiment_dir: experiments/maze-official

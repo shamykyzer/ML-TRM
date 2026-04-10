@@ -52,7 +52,7 @@ training:
   milestone_checkpoints: true
 
   # Upload best.pt as a versioned wandb Artifact on every new best
-  wandb_best_artifact: true
+  wandb_best_artifact: false
 
 data:
   dataset: sudoku
@@ -61,5 +61,5 @@ data:
 
 seed: 42
 device: cuda
-checkpoint_dir: models/sudoku-official
+checkpoint_dir: "C:/TRM checkpoints/sudoku-official"
 experiment_dir: experiments/sudoku-official
