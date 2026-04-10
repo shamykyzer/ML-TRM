@@ -63,7 +63,7 @@ class TRMTrainer:
         self.start_epoch = 0
         self.best_acc = 0.0
 
-        def lr_lambda(step):
+        def lr_lambda(step: int) -> float:
             if step < self.tc.warmup_steps:
                 return step / max(1, self.tc.warmup_steps)
             return 1.0
