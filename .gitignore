@@ -8,6 +8,8 @@ experiments/**/*.json
 results/**/*.json
 .env
 wandb/
-  
-# Auto-generated GPU-tuned configs  
-configs/*_tuned.yaml 
+hf_checkpoints/
+
+# Auto-generated GPU-tuned configs
+configs/*_tuned.yaml
+

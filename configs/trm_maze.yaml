@@ -21,7 +21,9 @@ training:
   N_sup: 16
   act_threshold: 0.5
   max_grad_norm: 1.0
-  use_wandb: false
+  use_wandb: true
+  wandb_project: TRM
+  wandb_entity: ""                    # set via TRM_WANDB_ENTITY in .env
   log_interval: 50
   save_interval: 500
 

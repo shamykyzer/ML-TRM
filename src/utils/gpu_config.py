@@ -1,8 +1,6 @@
 """Auto-detect GPU and apply optimal training config overrides."""
-import os
 import platform
 import torch
-import yaml
 
 from src.utils.config import ExperimentConfig
 
@@ -119,7 +117,7 @@ def apply_gpu_overrides(config: ExperimentConfig) -> None:
 
 
 if __name__ == "__main__":
-    import sys
-    path = sys.argv[1] if len(sys.argv) > 1 else "configs/trm_sudoku.yaml"
-    tuned = auto_tune_config(path)
-    print(f"\nTuned config written to: {tuned}")
+    # Manual GPU-detection debugging: `python -m src.utils.gpu_config`
+    profile = detect_gpu()
+    print(f"\nProfile: {profile}")
+    print(f"num_workers (this OS): {get_num_workers()}")

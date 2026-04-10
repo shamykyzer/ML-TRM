@@ -22,10 +22,11 @@ from tqdm import tqdm
 from src.models.losses_official import ACTLossHead
 from src.training.carbon_tracker import CarbonTracker
 from src.training.ema import EMA
+from src.training.wandb_utils import init_wandb, weave_op
 from src.utils.config import ExperimentConfig
 
 try:
-    import wandb
+    import wandb  # still needed for wandb.log / wandb.finish / wandb.Artifact
     WANDB_AVAILABLE = True
 except ImportError:
     WANDB_AVAILABLE = False
@@ -145,14 +146,9 @@ class OfficialTRMTrainer:
         if resume_checkpoint and os.path.isfile(resume_checkpoint):
             self._load_checkpoint(resume_checkpoint)
 
-        # W&B
-        self.use_wandb = self.tc.use_wandb and WANDB_AVAILABLE
-        if self.use_wandb:
-            wandb.init(
-                entity=self.tc.wandb_entity or None,
-                project=self.tc.wandb_project,
-                config=config.model_dump(),
-            )
+        # W&B + Weave — hostname-tagged run name, graceful auth check,
+        # and Weave trace init all handled in the shared helper.
+        self.use_wandb = init_wandb(config)
 
         # CSV log
         self.log_path = os.path.join(
@@ -354,6 +350,7 @@ class OfficialTRMTrainer:
 
         return {k: v / max(1, n_batches) for k, v in totals.items()}
 
+    @weave_op()
     @torch.no_grad()
     def evaluate(self) -> dict:
         self.ema.apply_shadow()

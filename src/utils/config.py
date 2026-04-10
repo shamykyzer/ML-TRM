@@ -1,8 +1,15 @@
+import os
 from enum import Enum
 from typing import Optional
 
 import yaml
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field
+
+# Load .env from repo root on module import (idempotent — safe if called twice).
+# Any machine-local secrets/paths in .env become available via os.getenv BEFORE
+# wandb.init() or huggingface_hub auth run.
+load_dotenv()
 
 
 class ModelType(str, Enum):
@@ -77,6 +84,7 @@ class TrainingConfig(BaseModel):
     use_wandb: bool = False
     wandb_project: str = "trm-coursework"
     wandb_entity: str = ""  # empty = use your default wandb user/team
+    use_weave: bool = True  # Weave traces for wandb.ai/<entity>/<project>/weave/monitors
     log_interval: int = 50
     save_interval: int = 500
 
@@ -126,4 +134,37 @@ class ExperimentConfig(BaseModel):
 def load_config(path: str) -> ExperimentConfig:
     with open(path) as f:
         raw = yaml.safe_load(f)
-    return ExperimentConfig(**raw)
+    cfg = ExperimentConfig(**raw)
+    _apply_env_overrides(cfg)
+    return cfg
+
+
+def _apply_env_overrides(cfg: ExperimentConfig) -> None:
+    """Override blank config fields from environment variables.
+
+    Semantics: an explicit YAML value always wins over env. Only fields that
+    are empty-string in YAML get overridden. This lets per-model configs
+    (e.g. llm_qwen.yaml) set their own wandb_project without being silently
+    clobbered by a blanket TRM_WANDB_PROJECT env var, while machine-specific
+    fields (entity, HF repo, rolling dir) default to "" in YAML and get
+    filled from .env on each machine.
+    """
+    # Wandb
+    if not cfg.training.wandb_entity:
+        cfg.training.wandb_entity = os.getenv("TRM_WANDB_ENTITY", "")
+    if os.getenv("TRM_WANDB_PROJECT"):
+        cfg.training.wandb_project = os.environ["TRM_WANDB_PROJECT"]
+
+    # HuggingFace Hub
+    if not cfg.training.hf_repo_id:
+        cfg.training.hf_repo_id = os.getenv("TRM_HF_REPO_ID", "")
+
+    # Rolling checkpoint dir
+    if not cfg.training.rolling_checkpoint_dir:
+        cfg.training.rolling_checkpoint_dir = os.getenv("TRM_ROLLING_CHECKPOINT_DIR", "")
+
+    # Data / checkpoint paths
+    if os.getenv("TRM_DATA_DIR"):
+        cfg.data.data_dir = os.environ["TRM_DATA_DIR"]
+    if os.getenv("TRM_CHECKPOINT_DIR"):
+        cfg.checkpoint_dir = os.environ["TRM_CHECKPOINT_DIR"]

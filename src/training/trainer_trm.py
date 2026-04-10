@@ -13,10 +13,11 @@ from src.models.layers import StableMaxCrossEntropy
 from src.models.recursion import deep_supervision_step
 from src.training.carbon_tracker import CarbonTracker
 from src.training.ema import EMA
+from src.training.wandb_utils import init_wandb, weave_op
 from src.utils.config import ExperimentConfig
 
 try:
-    import wandb
+    import wandb  # still needed for wandb.log / wandb.finish
 
     WANDB_AVAILABLE = True
 except ImportError:
@@ -99,11 +100,8 @@ class TRMTrainer:
         if resume_checkpoint and os.path.isfile(resume_checkpoint):
             self._load_checkpoint(resume_checkpoint)
 
-        if self.tc.use_wandb and WANDB_AVAILABLE:
-            wandb.init(
-                project=self.tc.wandb_project,
-                config=config.model_dump(),
-            )
+        # W&B + Weave — hostname-tagged run name, auth check, graceful degradation
+        self.use_wandb = init_wandb(config)
 
         # CSV log for remote progress tracking
         self.log_path = os.path.join(config.experiment_dir, f"{config.model.model_type.value}_train_log.csv")
@@ -169,8 +167,14 @@ class TRMTrainer:
             if (epoch + 1) % self.tc.log_interval == 0:
                 last_val = self.evaluate()
 
-                if self.tc.use_wandb and WANDB_AVAILABLE:
-                    wandb.log({**metrics, **{f"val_{k}": v for k, v in last_val.items()}})
+                if self.use_wandb:
+                    wandb.log(
+                        {
+                            **{f"train/{k}": v for k, v in metrics.items()},
+                            **{f"val/{k}": v for k, v in last_val.items()},
+                        },
+                        step=epoch + 1,
+                    )
 
                 new_best = ""
                 if last_val["puzzle_acc"] > best_acc:
@@ -200,6 +204,9 @@ class TRMTrainer:
 
         self._save_checkpoint(self.tc.epochs - 1, "latest.pt", best_acc)
         emissions = self.carbon.stop()
+
+        if self.use_wandb:
+            wandb.finish()
 
         results_path = os.path.join(self.config.experiment_dir, "training_results.json")
         with open(results_path, "w") as f:
@@ -241,6 +248,7 @@ class TRMTrainer:
 
         return {k: v / max(1, n_batches) for k, v in epoch_metrics.items()}
 
+    @weave_op()
     @torch.no_grad()
     def evaluate(self) -> dict:
         self.ema.apply_shadow()

@@ -37,12 +37,13 @@ training:
 
   use_wandb: true
   wandb_project: TRM
-  wandb_entity: shamykyzer
+  wandb_entity: ""                    # set via TRM_WANDB_ENTITY in .env
   log_interval: 50
   save_interval: 500
 
-  # Crash-recovery rolling backup on external NVMe
-  rolling_checkpoint_dir: "D:/ml-trm-checkpoints/maze-official"
+  # Crash-recovery rolling backup — set via TRM_ROLLING_CHECKPOINT_DIR in .env
+  # (blank = disabled; example: D:/ml-trm-checkpoints/maze-official)
+  rolling_checkpoint_dir: ""
   rolling_checkpoint_max: 3
   rolling_checkpoint_interval: 50
 

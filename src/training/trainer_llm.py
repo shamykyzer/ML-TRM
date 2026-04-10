@@ -9,7 +9,14 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from src.training.carbon_tracker import CarbonTracker
+from src.training.wandb_utils import init_wandb, weave_op
 from src.utils.config import ExperimentConfig
+
+try:
+    import wandb  # needed for wandb.log / wandb.finish when use_wandb=True
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
 
 
 class LLMTrainer:
@@ -50,6 +57,9 @@ class LLMTrainer:
         os.makedirs(config.checkpoint_dir, exist_ok=True)
         os.makedirs(config.experiment_dir, exist_ok=True)
 
+        # W&B + Weave — graceful auth check, hostname-tagged run name
+        self.use_wandb = init_wandb(config)
+
         self.log_path = os.path.join(config.experiment_dir, f"{self.model_tag}_train_log.csv")
 
     def _init_log(self) -> None:
@@ -82,8 +92,21 @@ class LLMTrainer:
                     f"{val_metrics['puzzle_acc']:.4f}", f"{elapsed:.1f}",
                 ])
 
+                if self.use_wandb:
+                    wandb.log(
+                        {
+                            "train/loss": metrics["loss"],
+                            "val/puzzle_acc": val_metrics["puzzle_acc"],
+                            "elapsed_min": elapsed,
+                        },
+                        step=epoch + 1,
+                    )
+
         self._save_checkpoint(self.tc.epochs - 1, f"{self.model_tag}_latest.pt")
         emissions = self.carbon.stop()
+
+        if self.use_wandb:
+            wandb.finish()
 
         results_path = os.path.join(self.config.experiment_dir, f"{self.model_tag}_training_results.json")
         with open(results_path, "w") as f:
@@ -111,6 +134,7 @@ class LLMTrainer:
 
         return {"loss": total_loss / max(1, n_batches)}
 
+    @weave_op()
     @torch.no_grad()
     def evaluate(self) -> dict:
         self.model.eval()

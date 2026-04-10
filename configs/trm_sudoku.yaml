@@ -21,10 +21,12 @@ training:
   N_sup: 16             # paper default (Less is More, Jolicoeur-Martineau 2025)
   act_threshold: 0.5
   max_grad_norm: 1.0
-  use_wandb: false
+  use_wandb: true
+  wandb_project: TRM
+  wandb_entity: ""                    # set via TRM_WANDB_ENTITY in .env
   log_interval: 5        # validate every 5 epochs
   save_interval: 25      # checkpoint every 25 epochs
-  hf_repo_id: shamykyzer/ml-trm-checkpoints
+  hf_repo_id: ""                      # set via TRM_HF_REPO_ID in .env
 
 data:
   dataset: sudoku

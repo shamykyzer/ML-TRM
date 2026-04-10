@@ -16,6 +16,7 @@ matplotlib>=3.8.0
 seaborn>=0.13.0
 
 wandb>=0.16.0
+weave>=0.51.0           # LLM/ML observability — powers the wandb.ai/.../weave/monitors page
 
 jupyter>=1.0.0
 ipywidgets>=8.1.0
@@ -31,6 +32,7 @@ huggingface_hub>=0.22.0 # downloading datasets/models from HuggingFace Hub
 peft>=0.10.0            # LoRA / QLoRA for LLM fine-tuning
 bitsandbytes>=0.43.0    # 4-bit quantization for QLoRA
 pyyaml>=6.0             # YAML config loading
+python-dotenv>=1.0.0    # load .env for machine-local config / secrets
 
 adam-atan2>=0.1.0         # arctan-bounded optimizer (official TRM recipe)
 

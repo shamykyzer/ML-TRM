@@ -1,6 +1,14 @@
 import os
 import time
 
+from dotenv import load_dotenv
+
+# Load .env before anything else — wandb/huggingface/weave all read their
+# auth from env vars at import time. Explicit call here is defensive
+# redundancy (config.py also calls it on import) so the dependency is
+# visible at the entry point.
+load_dotenv()
+
 from argdantic import ArgParser
 from pydantic import BaseModel
 

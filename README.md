@@ -87,76 +87,107 @@ ML-TRM/
 +-- .github/workflows/
 |   +-- training-notify.yml        # GitHub Action: post training stats on push
 +-- main.py                        # CLI entrypoint (train / eval / distill)
-+-- run.py                         # Task runner (python run.py <target>)
-+-- run.sh                         # Bash task runner with interactive menu
++-- start.py                       # Stage-aware onboarding (venv -> .env -> wandb -> data)
++-- run.sh                         # Bash task runner (Linux-only, optional)
++-- .env.example                   # Template for machine-local config / secrets
 +-- models/                        # Saved checkpoints
 +-- experiments/                   # CodeCarbon logs + training CSV logs
 +-- results/                       # Evaluation outputs
 ```
 
-## Setup
+## Running on a new machine
 
 **Requirements:** Python 3.10-3.12, NVIDIA GPU with CUDA
 
-### 1. Create virtual environment
+`start.py` is a stage-aware onboarding script: run it once, it handles the next missing
+setup stage (venv -> .env -> wandb -> data), tells you what it did, and exits. Re-run
+until it prints the training menu.
+
+### 1. Clone + create venv with CUDA torch
+
+```bash
+git clone <repo-url>
+cd ML-TRM
+python start.py        # creates venv, installs torch (cu128) + requirements
+```
+
+### 2. Copy env template and fill in your secrets
+
+```bash
+cp .env.example .env
+# Edit .env: set WANDB_API_KEY at minimum.
+# Get yours from https://wandb.ai/authorize
+python start.py        # continues to the next stage
+```
+
+### 3. Log in to wandb (optional but recommended)
+
+```bash
+wandb login            # paste the API key from .env
+python start.py        # continues
+
+# Or skip wandb entirely:
+python start.py --skip-wandb
+```
+
+### 4. Build datasets
+
+```bash
+python start.py        # downloads Sudoku + Maze from HuggingFace
+```
+
+### 5. Activate venv + train
 
 ```bash
 # Windows
-python -m venv .venv
-.venv\Scripts\activate
+"C:\Users\<you>\.venvs\ml-trm\Scripts\activate"
 
 # Linux/Mac
-python -m venv .venv
 source .venv/bin/activate
+
+python main.py --mode train --config configs/trm_official_sudoku.yaml
 ```
 
-### 2. Install dependencies
+Run `python start.py status` at any time to see which stages are ready.
 
-```bash
-# Install PyTorch with CUDA first (visit https://pytorch.org for your CUDA version)
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+### Optional overrides
 
-# Install all other dependencies
-pip install -r requirements.txt
+All machine-specific paths live in `.env` - see `.env.example` for the full list. The
+most useful ones:
+
+- `TRM_WANDB_ENTITY` - your wandb username or team entity
+- `TRM_ROLLING_CHECKPOINT_DIR` - external drive for crash-recovery backups (e.g. `D:/ml-trm-checkpoints`)
+- `TRM_HF_REPO_ID` + `HF_TOKEN` - HuggingFace Hub repo for checkpoint sync
+- `TRM_DATA_DIR` / `TRM_CHECKPOINT_DIR` - move data/checkpoints off the repo
+
+**Semantics:** explicit values in the YAML always win over `.env`. Machine-specific
+fields default to `""` in the committed YAMLs so a fresh clone + `.env` just works.
+
+### Weave monitors
+
+Each `evaluate()` call is traced via Weights & Biases Weave when wandb is authed.
+Traces appear at:
+
+```
+https://wandb.ai/<entity>/<project>/weave/monitors
 ```
 
-### 3. Build datasets (one-time, downloads from HuggingFace)
-
-```bash
-cd data
-
-# Sudoku-Extreme: 1K train / 423K test
-python build_sudoku_dataset.py --output-dir sudoku-extreme-full
-
-# Maze-Hard: 1K train / 1K test
-python build_maze_dataset.py --output-dir maze-30x30-hard-1k
-
-cd ..
-```
-
-### 4. Verify setup
-
-```bash
-python run.py verify
-```
+You can configure scorers and monitors on that page - see the
+[Weave Monitors docs](https://docs.wandb.ai/weave/guides/evaluation/monitors).
+To disable tracing for a run, set `training.use_weave: false` in the config YAML.
 
 ## Quick Start
 
-All commands are available via `python run.py`. Run `python run.py help` to see the full menu with descriptions.
+Every trainer runs via `python main.py --mode train --config <yaml>`. The configs under
+`configs/` are the canonical entry points:
 
 ```bash
-python run.py setup-cuda          # 1. Create venv + install with CUDA
-python run.py data-all            # 2. Download both datasets
-python run.py train-sudoku        # 3. Train TRM on Sudoku (60K epochs)
-python run.py train-maze          # 4. Train TRM on Maze (5K epochs)
-```
-
-Or use pipelines to run everything in one command:
-
-```bash
-python run.py pipeline-sudoku     # Setup + data + train sudoku
-python run.py pipeline-maze       # Setup + data + train maze
-python run.py pipeline            # Setup + data + train everything
+python main.py --mode train --config configs/trm_official_sudoku.yaml   # TRM-MLP sudoku
+python main.py --mode train --config configs/trm_official_maze.yaml     # TRM-Att maze
+python main.py --mode train --config configs/llm_config.yaml            # GPT-2 + LoRA
+python main.py --mode train --config configs/llm_qwen.yaml              # Qwen2.5-0.5B
+python main.py --mode train --config configs/llm_smollm.yaml            # SmolLM2-360M
+python main.py --mode train --config configs/llm_llama.yaml             # Llama-3.2-1B
 ```
 
 ## Training
@@ -173,8 +204,8 @@ GPU batch sizes are auto-detected. Times decrease as ACT kicks in (model learns 
 ### Train TRM models
 
 ```bash
-python run.py train-sudoku        # TRM-MLP on Sudoku (~24h on RTX 3070)
-python run.py train-maze          # TRM-Att on Maze   (~5d on RTX 3070)
+python main.py --mode train --config configs/trm_official_sudoku.yaml   # TRM-MLP (~24h on RTX 3070)
+python main.py --mode train --config configs/trm_official_maze.yaml     # TRM-Att (~5d on RTX 3070)
 ```
 
 **Do not run both at the same time** -- they share GPU VRAM.
@@ -182,27 +213,39 @@ python run.py train-maze          # TRM-Att on Maze   (~5d on RTX 3070)
 ### Train LLM baselines
 
 ```bash
-python run.py train-llm-all       # All 4 LLMs sequentially (~4-6h)
-python run.py train-distill       # Knowledge distillation (needs trained GPT-2)
+python main.py --mode train --config configs/llm_config.yaml    # GPT-2
+python main.py --mode train --config configs/llm_qwen.yaml      # Qwen2.5-0.5B
+python main.py --mode train --config configs/llm_smollm.yaml    # SmolLM2-360M
+python main.py --mode train --config configs/llm_llama.yaml     # Llama-3.2-1B
 ```
 
 ### Resuming training
 
-Training can be resumed from any checkpoint. Progress is fully restored (optimizer, scheduler, EMA, epoch count).
+Training can be resumed from any checkpoint. Progress is fully restored (optimizer,
+scheduler, EMA, epoch count).
 
 ```bash
-python run.py resume-sudoku       # Resume from models/sudoku/latest.pt
-python run.py resume-maze         # Resume from models/maze/latest.pt
+python main.py --mode train --config configs/trm_official_sudoku.yaml \
+    --resume models/sudoku-official/latest.pt
+
+python main.py --mode train --config configs/trm_official_maze.yaml \
+    --resume models/maze-official/latest.pt
 ```
 
-To increase epochs after an initial run, edit the `epochs` value in the config YAML, then resume.
+To increase epochs after an initial run, edit the `epochs` value in the config YAML,
+then resume.
 
 ### Evaluation
 
 ```bash
-python run.py eval-sudoku         # Evaluate best TRM-Sudoku checkpoint
-python run.py eval-maze           # Evaluate best TRM-Maze checkpoint
-python run.py eval-llm            # Evaluate GPT-2 baseline
+python main.py --mode eval --config configs/trm_official_sudoku.yaml \
+    --checkpoint models/sudoku-official/best.pt
+
+python main.py --mode eval --config configs/trm_official_maze.yaml \
+    --checkpoint models/maze-official/best.pt
+
+python main.py --mode eval --config configs/llm_config.yaml \
+    --checkpoint models/llm/best.pt
 ```
 
 ### Remote progress monitoring

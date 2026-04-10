@@ -1,0 +1,265 @@
+#!/usr/bin/env python
+"""Stage-aware onboarding for ML-TRM. Runs on system Python, no third-party deps.
+
+One command, one stage at a time. Each invocation runs the next missing
+setup stage, prints "done" + what to run next, and exits. When every
+stage is satisfied, prints a menu of training commands to copy-paste.
+
+Usage:
+    python start.py               # run the next missing setup stage
+    python start.py status        # show stage status without running anything
+    python start.py --skip-wandb  # skip the wandb auth stage (and continue)
+"""
+import os
+import platform
+import shutil
+import subprocess
+import sys
+from dataclasses import dataclass
+from typing import Callable, List, Tuple
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+os.chdir(ROOT)
+
+# --- Venv path detection ---
+# Windows uses a shorter path to avoid MAX_PATH issues during pip install.
+if platform.system() == "Windows":
+    VENV_DIR = os.environ.get(
+        "TRM_VENV_DIR",
+        os.path.join(os.path.expanduser("~"), ".venvs", "ml-trm"),
+    )
+    PYTHON = os.path.join(VENV_DIR, "Scripts", "python.exe")
+    PIP = os.path.join(VENV_DIR, "Scripts", "pip.exe")
+    ACTIVATE_HINT = f'"{os.path.join(VENV_DIR, "Scripts", "activate")}"'
+else:
+    VENV_DIR = os.environ.get("TRM_VENV_DIR", os.path.join(ROOT, ".venv"))
+    PYTHON = os.path.join(VENV_DIR, "bin", "python")
+    PIP = os.path.join(VENV_DIR, "bin", "pip")
+    ACTIVATE_HINT = f"source {os.path.join(VENV_DIR, 'bin', 'activate')}"
+
+
+# ANSI color codes (best-effort; Windows terminals >= Win10 support these)
+CYAN = "\033[96m"
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+DIM = "\033[2m"
+BOLD = "\033[1m"
+RESET = "\033[0m"
+
+
+def _run(cmd: List[str], cwd: str = None) -> None:
+    """Run a subprocess, stream output, abort on failure."""
+    print(f"\n{DIM}>>> {' '.join(cmd)}{RESET}\n")
+    result = subprocess.run(cmd, cwd=cwd or ROOT)
+    if result.returncode != 0:
+        print(f"\n{YELLOW}!!! Command failed (exit {result.returncode}){RESET}")
+        sys.exit(result.returncode)
+
+
+# ============================================================
+# Stage actions — what to do when a stage is not ready
+# ============================================================
+
+def _setup_venv() -> None:
+    """Create venv and install CUDA torch + requirements."""
+    os.makedirs(os.path.dirname(VENV_DIR), exist_ok=True)
+    _run([sys.executable, "-m", "venv", VENV_DIR])
+    _run([PYTHON, "-m", "pip", "install", "--upgrade", "pip"])
+    _run([
+        PIP, "install", "torch", "torchvision",
+        "--index-url", "https://download.pytorch.org/whl/cu128",
+    ])
+    _run([PIP, "install", "-r", "requirements.txt"])
+    _run([
+        PYTHON, "-c",
+        "import torch; "
+        "print(f'CUDA: {torch.cuda.is_available()}, "
+        "GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"NONE\"}')",
+    ])
+
+
+def _bootstrap_env() -> None:
+    """Copy .env.example to .env and tell the user to edit it."""
+    src = os.path.join(ROOT, ".env.example")
+    dst = os.path.join(ROOT, ".env")
+    if not os.path.exists(src):
+        print(f"{YELLOW}!!! .env.example not found — can't bootstrap .env{RESET}")
+        sys.exit(1)
+    shutil.copy(src, dst)
+    print(f"\n{GREEN}✓ Created .env from .env.example{RESET}")
+    print(f"\n{BOLD}→ Edit .env to set at least:{RESET}")
+    print(f"   {CYAN}WANDB_API_KEY{RESET}   (from https://wandb.ai/authorize)")
+    print(f"\n{DIM}Then re-run:{RESET} python start.py")
+
+
+def _wandb_instructions() -> None:
+    """Print wandb login instructions and exit (user takes action manually)."""
+    print(f"\n{YELLOW}⚠  wandb not authed.{RESET} Your configs have use_wandb=true.")
+    print(f"{DIM}   (Training will still work — wandb tracking just gets disabled.){RESET}")
+    print(f"\n{BOLD}→ To enable wandb:{RESET}")
+    print(f"   {CYAN}wandb login{RESET}           # paste your API key when prompted")
+    print(f"   {CYAN}python start.py{RESET}       # continue")
+    print(f"\n{BOLD}→ To skip wandb and continue anyway:{RESET}")
+    print(f"   {CYAN}python start.py --skip-wandb{RESET}")
+
+
+def _bootstrap_data() -> None:
+    """Download whichever datasets are missing."""
+    data_dir = os.path.join(ROOT, "data")
+    sudoku_ok = os.path.exists(os.path.join(data_dir, "sudoku-extreme-full/train/all__inputs.npy"))
+    maze_ok = os.path.exists(os.path.join(data_dir, "maze-30x30-hard-1k/train/all__inputs.npy"))
+
+    if not sudoku_ok:
+        print(f"{CYAN}Downloading Sudoku dataset...{RESET}")
+        _run([
+            PYTHON, "build_sudoku_dataset.py",
+            "--output-dir", "sudoku-extreme-full",
+            "--subsample-size", "1000",
+        ], cwd=data_dir)
+
+    if not maze_ok:
+        print(f"{CYAN}Downloading Maze dataset...{RESET}")
+        _run([
+            PYTHON, "build_maze_dataset.py",
+            "--output-dir", "maze-30x30-hard-1k",
+        ], cwd=data_dir)
+
+
+# ============================================================
+# Stage checks — pure os-level probes, no third-party imports
+# ============================================================
+
+def _venv_ready() -> bool:
+    """Venv exists AND its python can import torch."""
+    if not os.path.exists(PYTHON):
+        return False
+    result = subprocess.run(
+        [PYTHON, "-c", "import torch"],
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
+def _env_ready() -> bool:
+    return os.path.exists(os.path.join(ROOT, ".env"))
+
+
+def _wandb_ready() -> bool:
+    """WANDB_API_KEY env var set, OR ~/.netrc has wandb credentials."""
+    if os.getenv("WANDB_API_KEY"):
+        return True
+    netrc = os.path.expanduser("~/.netrc")
+    if os.path.exists(netrc):
+        try:
+            with open(netrc) as f:
+                return "api.wandb.ai" in f.read()
+        except OSError:
+            return False
+    return False
+
+
+def _data_ready() -> bool:
+    return (
+        os.path.exists(os.path.join(ROOT, "data/sudoku-extreme-full/train/all__inputs.npy"))
+        and os.path.exists(os.path.join(ROOT, "data/maze-30x30-hard-1k/train/all__inputs.npy"))
+    )
+
+
+# ============================================================
+# Stage definition
+# ============================================================
+
+@dataclass
+class Stage:
+    key: str
+    label: str
+    check: Callable[[], bool]
+    action: Callable[[], None]
+    blocking: bool = True
+
+
+STAGES: List[Stage] = [
+    Stage("venv",  "Python venv with CUDA torch", _venv_ready,  _setup_venv),
+    Stage("env",   "Machine-local .env file",     _env_ready,   _bootstrap_env),
+    Stage("wandb", "wandb logged in",             _wandb_ready, _wandb_instructions, blocking=False),
+    Stage("data",  "Sudoku + Maze datasets",      _data_ready,  _bootstrap_data),
+]
+
+
+# ============================================================
+# Output helpers
+# ============================================================
+
+def _print_stage_status(results: List[Tuple[Stage, bool]], skip_wandb: bool) -> None:
+    print(f"\n{BOLD}=== ML-TRM Setup Status ==={RESET}\n")
+    for stage, done in results:
+        if stage.key == "wandb" and skip_wandb and not done:
+            mark, color, suffix = "~", DIM, " (skipped)"
+        elif done:
+            mark, color, suffix = "✓", GREEN, ""
+        else:
+            mark, color, suffix = " ", "", ""
+        print(f"  [{color}{mark}{RESET}] {stage.key:<7s}  {stage.label}{suffix}")
+    print()
+
+
+def _print_training_menu() -> None:
+    print(f"\n{GREEN}{BOLD}✓ All setup complete!{RESET}\n")
+    print(f"{BOLD}Activate your venv:{RESET}")
+    print(f"  {CYAN}{ACTIVATE_HINT}{RESET}\n")
+    print(f"{BOLD}Then train:{RESET}")
+    print(f"  {CYAN}python main.py --mode train --config configs/trm_official_sudoku.yaml{RESET}")
+    print(f"  {CYAN}python main.py --mode train --config configs/trm_official_maze.yaml{RESET}")
+    print(f"  {CYAN}python main.py --mode train --config configs/llm_config.yaml{RESET}     {DIM}# GPT-2{RESET}")
+    print(f"  {CYAN}python main.py --mode train --config configs/llm_qwen.yaml{RESET}       {DIM}# Qwen2.5-0.5B{RESET}")
+    print(f"  {CYAN}python main.py --mode train --config configs/llm_smollm.yaml{RESET}     {DIM}# SmolLM2-360M{RESET}")
+    print(f"  {CYAN}python main.py --mode train --config configs/llm_llama.yaml{RESET}      {DIM}# Llama-3.2-1B{RESET}\n")
+    print(f"{BOLD}Evaluate (after training):{RESET}")
+    print(f"  {CYAN}python main.py --mode eval --config configs/<name>.yaml --checkpoint models/<name>/best.pt{RESET}\n")
+    print(f"{BOLD}Resume from last checkpoint:{RESET}")
+    print(f"  {CYAN}python main.py --mode train --config configs/<name>.yaml --resume models/<name>/latest.pt{RESET}\n")
+    print(f"{DIM}Tip: run `python start.py status` any time to re-check stages.{RESET}")
+    print(f"{DIM}Tip: Weave traces for monitors appear at wandb.ai/<entity>/<project>/weave/monitors{RESET}\n")
+
+
+# ============================================================
+# Entry points
+# ============================================================
+
+def main() -> None:
+    args = sys.argv[1:]
+    skip_wandb = "--skip-wandb" in args
+    args = [a for a in args if a != "--skip-wandb"]
+
+    if args and args[0] == "status":
+        results = [(s, s.check()) for s in STAGES]
+        _print_stage_status(results, skip_wandb)
+        missing = [s for s, done in results if not done and s.blocking]
+        if not missing:
+            print(f"{GREEN}All blocking stages ready.{RESET} Run: python start.py")
+        else:
+            print(f"{BOLD}Next stage:{RESET} {missing[0].key}. Run: python start.py")
+        return
+
+    results = [(s, s.check()) for s in STAGES]
+    _print_stage_status(results, skip_wandb)
+
+    for stage, done in results:
+        if done:
+            continue
+        if stage.key == "wandb" and skip_wandb:
+            continue
+        print(f"{BOLD}[{stage.key}] {stage.label}{RESET} — not ready. Running...")
+        stage.action()
+        if stage.check():
+            print(f"\n{GREEN}✓ [{stage.key}] ready.{RESET}")
+            print(f"\n{BOLD}→ Next:{RESET} python start.py")
+        return
+
+    # All stages done
+    _print_training_menu()
+
+
+if __name__ == "__main__":
+    main()
