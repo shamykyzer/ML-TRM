@@ -25,14 +25,21 @@ class RunConfig(BaseModel):
     mode: str = "train"  # train | eval | distill
     checkpoint: str = ""
     resume: str = ""  # path to checkpoint to resume training from
-    seed: int = -1  # -1 = random seed each run
+    # -1 (default) = inherit from YAML's `seed:` field (reproducible).
+    # Pass an explicit non-negative int to override for one run.
+    # To opt into a fresh wall-clock seed per run, set `seed: -1` in the YAML.
+    seed: int = -1
 
 
 @cli.command(singleton=True)
 def main(cfg: RunConfig):
     config = load_config(cfg.config)
+    # Seed priority: CLI --seed > YAML config.seed > wall-clock fallback.
+    # YAML default is 42 (see ExperimentConfig in src/utils/config.py), so
+    # running without --seed gives deterministic, reproducible runs. Only
+    # YAML seed < 0 triggers the legacy wall-clock behavior.
     if cfg.seed < 0:
-        cfg.seed = int(time.time()) % (2**31)
+        cfg.seed = config.seed if config.seed >= 0 else int(time.time()) % (2**31)
     config.seed = cfg.seed
     apply_gpu_overrides(config)
     print(f"[Seed] {cfg.seed}")

@@ -306,18 +306,26 @@ def _print_training_menu() -> None:
     py = f"& {py_quoted}" if is_powershell else py_quoted
 
     print(f"{BOLD}Train:{RESET} {DIM}(copy-paste as-is — no venv activation needed){RESET}")
-    print(f"  {CYAN}{py} main.py --mode train --config configs/trm_official_sudoku.yaml{RESET}")
-    print(f"  {CYAN}{py} main.py --mode train --config configs/trm_official_maze.yaml{RESET}")
-    print(f"  {CYAN}{py} main.py --mode train --config configs/llm_config.yaml{RESET}     {DIM}# GPT-2{RESET}")
-    print(f"  {CYAN}{py} main.py --mode train --config configs/llm_qwen.yaml{RESET}       {DIM}# Qwen2.5-0.5B{RESET}")
-    print(f"  {CYAN}{py} main.py --mode train --config configs/llm_smollm.yaml{RESET}     {DIM}# SmolLM2-360M{RESET}")
-    print(f"  {CYAN}{py} main.py --mode train --config configs/llm_llama.yaml{RESET}      {DIM}# Llama-3.2-1B{RESET}\n")
+    print(f"  {CYAN}{py} main.py --mode train --config configs/trm_official_sudoku.yaml --seed 42{RESET}")
+    print(f"  {CYAN}{py} main.py --mode train --config configs/trm_official_maze.yaml --seed 42{RESET}")
+    print(f"  {CYAN}{py} main.py --mode train --config configs/llm_config.yaml --seed 42{RESET}     {DIM}# GPT-2{RESET}")
+    print(f"  {CYAN}{py} main.py --mode train --config configs/llm_qwen.yaml --seed 42{RESET}       {DIM}# Qwen2.5-0.5B{RESET}")
+    print(f"  {CYAN}{py} main.py --mode train --config configs/llm_smollm.yaml --seed 42{RESET}     {DIM}# SmolLM2-360M{RESET}")
+    print(f"  {CYAN}{py} main.py --mode train --config configs/llm_llama.yaml --seed 42{RESET}      {DIM}# Llama-3.2-1B{RESET}\n")
 
     print(f"{BOLD}Evaluate (after training):{RESET}")
     print(f"  {CYAN}{py} main.py --mode eval --config configs/<name>.yaml --checkpoint models/<name>/best.pt{RESET}\n")
 
     print(f"{BOLD}Resume from last checkpoint:{RESET}")
-    print(f"  {CYAN}{py} main.py --mode train --config configs/<name>.yaml --resume models/<name>/latest.pt{RESET}\n")
+    print(f"  {CYAN}{py} main.py --mode train --config configs/<name>.yaml --resume models/<name>/latest.pt --seed 42{RESET}\n")
+
+    print(f"{BOLD}Reproducibility — seed convention:{RESET}")
+    print(f"  {DIM}Every training command above passes {RESET}{CYAN}--seed 42{RESET}{DIM} explicitly so the seed is")
+    print(f"  visible in shell history and wandb run names. Omitting --seed also")
+    print(f"  works — main.py then inherits the {RESET}{CYAN}seed:{RESET}{DIM} field from the YAML config")
+    print(f"  (also 42 by default). To run a stochastic sweep, pass a different int")
+    print(f"  per run ({RESET}{CYAN}--seed 1{RESET}{DIM}, {RESET}{CYAN}--seed 2{RESET}{DIM}, ...) or set {RESET}{CYAN}seed: -1{RESET}{DIM} in the YAML to get")
+    print(f"  a fresh wall-clock seed every run.{RESET}\n")
 
     print(f"{DIM}Why the full path? Your system `python` isn't the venv's python, so a bare{RESET}")
     print(f"{DIM}`python main.py` hits ModuleNotFoundError. The full-path form dodges that{RESET}")
