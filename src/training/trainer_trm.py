@@ -144,6 +144,8 @@ class TRMTrainer:
             return f"{seconds / 3600:.1f}h"
         return f"{seconds / 60:.0f}m"
 
+    BAR_FORMAT = "  {n_fmt}/{total_fmt} |{bar}| [{elapsed}<{remaining}, {rate_fmt}]"
+
     def train(self) -> None:
         self._init_log()
         self.carbon.start()
@@ -153,19 +155,9 @@ class TRMTrainer:
         epoch_times = []
         last_val = {}
 
-        # Epoch-level progress bar, updated per batch within each epoch
-        total_epochs = self.tc.epochs - self.start_epoch
-        step_bar = tqdm(
-            total=total_epochs,
-            desc="Training",
-            unit="ep",
-            dynamic_ncols=True,
-        )
-
         for epoch in range(self.start_epoch, self.tc.epochs):
             epoch_start = time.time()
-            metrics = self._train_epoch(epoch, step_bar)
-            step_bar.update(1)
+            metrics = self._train_epoch(epoch)
             epoch_times.append(time.time() - epoch_start)
 
             # Rolling ETA from last 10 epochs
@@ -173,17 +165,6 @@ class TRMTrainer:
             avg_sec = sum(recent) / len(recent)
             eta_sec = (self.tc.epochs - (epoch + 1)) * avg_sec
             elapsed = time.time() - t_start
-
-            # End-of-epoch summary on the bar
-            step_bar.set_description_str(f"Training Ep {epoch + 1}/{self.tc.epochs}")
-            step_bar.set_postfix_str(
-                f"CE={metrics['ce_loss']:.3f}  "
-                f"Q={metrics['q_mean']:.3f}  "
-                f"Sup={metrics['steps_taken']:.0f}/{self.tc.N_sup}  "
-                f"Val={'%.1f%%' % (last_val['puzzle_acc'] * 100) if last_val else '—'}  "
-                f"Best={'%.1f%%' % (best_acc * 100)}  "
-                f"ETA={self._fmt_time(eta_sec)}"
-            )
 
             if (epoch + 1) % self.tc.log_interval == 0:
                 last_val = self.evaluate()
@@ -197,13 +178,14 @@ class TRMTrainer:
                     self._save_checkpoint(epoch, "best.pt", best_acc)
                     new_best = " NEW BEST!"
 
-                tqdm.write(
-                    f"  [{epoch + 1}/{self.tc.epochs}] "
-                    f"cell={last_val['cell_acc']:.1%}  "
-                    f"puzzle={last_val['puzzle_acc']:.1%}  "
-                    f"best={best_acc:.1%}  "
-                    f"CE={metrics['ce_loss']:.4f}  "
-                    f"elapsed={self._fmt_time(elapsed)}"
+                print(
+                    f"Epoch {epoch + 1}/{self.tc.epochs} - "
+                    f"ce_loss: {metrics['ce_loss']:.4f}  "
+                    f"cell_acc: {last_val['cell_acc']:.4f}  "
+                    f"puzzle_acc: {last_val['puzzle_acc']:.4f}  "
+                    f"best: {best_acc:.4f}  "
+                    f"elapsed: {self._fmt_time(elapsed)}  "
+                    f"ETA: {self._fmt_time(eta_sec)}"
                     f"{new_best}"
                 )
 
@@ -216,7 +198,6 @@ class TRMTrainer:
             if (epoch + 1) % self.tc.save_interval == 0:
                 self._save_checkpoint(epoch, f"epoch_{epoch + 1}.pt", best_acc)
 
-        step_bar.close()
         self._save_checkpoint(self.tc.epochs - 1, "latest.pt", best_acc)
         emissions = self.carbon.stop()
 
@@ -224,7 +205,7 @@ class TRMTrainer:
         with open(results_path, "w") as f:
             json.dump({"best_puzzle_acc": best_acc, "emissions": emissions}, f, indent=2)
 
-    def _train_epoch(self, epoch: int, step_bar: tqdm) -> dict:
+    def _train_epoch(self, epoch: int) -> dict:
         self.model.train()
         epoch_metrics = {
             "ce_loss": 0.0, "q_loss": 0.0, "q_mean": 0.0,
@@ -232,7 +213,7 @@ class TRMTrainer:
         }
         n_batches = 0
 
-        for inputs, labels in self.train_loader:
+        for inputs, labels in tqdm(self.train_loader, bar_format=self.BAR_FORMAT):
             inputs = inputs.to(self.device)
             labels = labels.to(self.device)
 
@@ -257,16 +238,6 @@ class TRMTrainer:
             for k in epoch_metrics:
                 epoch_metrics[k] += metrics[k]
             n_batches += 1
-
-            # Update metrics every batch (bar advances per epoch, not per batch)
-            total_batches = len(self.train_loader)
-            step_bar.set_description_str(f"Training Ep {epoch + 1}/{self.tc.epochs}")
-            step_bar.set_postfix_str(
-                f"Step={n_batches}/{total_batches}  "
-                f"CE={metrics['ce_loss']:.3f}  "
-                f"Q={metrics['q_mean']:.3f}  "
-                f"Sup={metrics['steps_taken']:.0f}/{self.tc.N_sup}"
-            )
 
         return {k: v / max(1, n_batches) for k, v in epoch_metrics.items()}
 

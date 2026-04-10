@@ -125,6 +125,13 @@ class OfficialTRMTrainer:
         os.makedirs(config.checkpoint_dir, exist_ok=True)
         os.makedirs(config.experiment_dir, exist_ok=True)
 
+        # Pre-compute milestone epochs: {epoch_number (1-indexed) -> percent label}
+        self.milestone_epochs: dict[int, int] = {}
+        if self.tc.milestone_checkpoints:
+            for frac in self.tc.milestone_fractions:
+                ep = max(1, int(round(self.tc.epochs * frac)))
+                self.milestone_epochs[ep] = int(round(frac * 100))
+
         # HuggingFace Hub
         self.hf_repo_id = getattr(self.tc, "hf_repo_id", "")
         if self.hf_repo_id and HF_AVAILABLE:
@@ -142,6 +149,7 @@ class OfficialTRMTrainer:
         self.use_wandb = self.tc.use_wandb and WANDB_AVAILABLE
         if self.use_wandb:
             wandb.init(
+                entity=self.tc.wandb_entity or None,
                 project=self.tc.wandb_project,
                 config=config.model_dump(),
             )
@@ -190,39 +198,31 @@ class OfficialTRMTrainer:
             return f"{seconds / 3600:.1f}h"
         return f"{seconds / 60:.0f}m"
 
+    BAR_FORMAT = "  {n_fmt}/{total_fmt} |{bar}| [{elapsed}<{remaining}, {rate_fmt}]"
+
     def train(self) -> None:
         self._init_log()
         self.carbon.start()
         t_start = time.time()
 
-        best_acc = self.best_acc
         epoch_times = []
         last_val = {}
 
-        total_epochs = self.tc.epochs - self.start_epoch
-        step_bar = tqdm(total=total_epochs, desc="Training", unit="ep", dynamic_ncols=True)
-
         for epoch in range(self.start_epoch, self.tc.epochs):
+            # MUST be the first line: resets the lazy checkpoint payload per
+            # epoch. If we skipped this and a later epoch's save_interval fired
+            # without the log_interval branch having rebuilt the payload, we'd
+            # silently write a stale state_dict from an earlier epoch.
+            payload: dict | None = None
+
             epoch_start = time.time()
-            metrics = self._train_epoch(epoch, step_bar)
-            step_bar.update(1)
+            metrics = self._train_epoch(epoch)
             epoch_times.append(time.time() - epoch_start)
 
             recent = epoch_times[-10:]
             avg_sec = sum(recent) / len(recent)
             eta_sec = (self.tc.epochs - (epoch + 1)) * avg_sec
             elapsed = time.time() - t_start
-
-            step_bar.set_description_str(f"Training Ep {epoch + 1}/{self.tc.epochs}")
-            step_bar.set_postfix_str(
-                f"LM={metrics['lm_loss']:.3f}  "
-                f"Qh={metrics['q_halt_loss']:.3f}  "
-                f"Steps={metrics['avg_steps']:.1f}  "
-                f"Acc={metrics['exact_accuracy']:.1%}  "
-                f"Val={'%.1f%%' % (last_val.get('puzzle_acc', 0) * 100)}  "
-                f"Best={'%.1f%%' % (best_acc * 100)}  "
-                f"ETA={self._fmt_time(eta_sec)}"
-            )
 
             if self.use_wandb:
                 wandb.log({f"train/{k}": v for k, v in metrics.items()}, step=epoch + 1)
@@ -234,18 +234,22 @@ class OfficialTRMTrainer:
                     wandb.log({f"val/{k}": v for k, v in last_val.items()}, step=epoch + 1)
 
                 new_best = ""
-                if last_val["puzzle_acc"] > best_acc:
-                    best_acc = last_val["puzzle_acc"]
-                    self._save_checkpoint(epoch, "best.pt", best_acc)
+                if last_val["puzzle_acc"] > self.best_acc:
+                    self.best_acc = last_val["puzzle_acc"]
+                    payload = payload or self._checkpoint_payload(epoch)
+                    self._save_checkpoint("best.pt", payload)
+                    if self.use_wandb and self.tc.wandb_best_artifact:
+                        self._log_best_to_wandb(epoch)
                     new_best = " NEW BEST!"
 
-                tqdm.write(
-                    f"  [{epoch + 1}/{self.tc.epochs}] "
-                    f"cell={last_val['cell_acc']:.1%}  "
-                    f"puzzle={last_val['puzzle_acc']:.1%}  "
-                    f"best={best_acc:.1%}  "
-                    f"LM={metrics['lm_loss']:.4f}  "
-                    f"elapsed={self._fmt_time(elapsed)}"
+                print(
+                    f"Epoch {epoch + 1}/{self.tc.epochs} - "
+                    f"lm_loss: {metrics['lm_loss']:.4f}  "
+                    f"cell_acc: {last_val['cell_acc']:.4f}  "
+                    f"puzzle_acc: {last_val['puzzle_acc']:.4f}  "
+                    f"best: {self.best_acc:.4f}  "
+                    f"elapsed: {self._fmt_time(elapsed)}  "
+                    f"ETA: {self._fmt_time(eta_sec)}"
                     f"{new_best}"
                 )
 
@@ -260,15 +264,31 @@ class OfficialTRMTrainer:
                     f"{metrics['avg_steps']:.1f}",
                     f"{last_val['cell_acc']:.4f}",
                     f"{last_val['puzzle_acc']:.4f}",
-                    f"{best_acc:.4f}",
+                    f"{self.best_acc:.4f}",
                     f"{elapsed / 60:.1f}",
                 ])
 
             if (epoch + 1) % self.tc.save_interval == 0:
-                self._save_checkpoint(epoch, f"epoch_{epoch + 1}.pt", best_acc)
+                payload = payload or self._checkpoint_payload(epoch)
+                self._save_checkpoint(f"epoch_{epoch + 1}.pt", payload)
 
-        step_bar.close()
-        self._save_checkpoint(self.tc.epochs - 1, "latest.pt", best_acc)
+            # Rolling crash-recovery backup (independent cadence)
+            if (
+                self.tc.rolling_checkpoint_dir
+                and (epoch + 1) % self.tc.rolling_checkpoint_interval == 0
+            ):
+                payload = payload or self._checkpoint_payload(epoch)
+                self._save_rolling_checkpoint(epoch, payload)
+
+            # Milestone snapshots at fixed fractions (resume-safe).
+            # Single .get() replaces the old two-step (in + .get()) pattern.
+            pct = self.milestone_epochs.get(epoch + 1) if self.milestone_epochs else None
+            if pct is not None:
+                payload = payload or self._checkpoint_payload(epoch)
+                self._save_milestone_checkpoint(pct, payload)
+
+        final_payload = self._checkpoint_payload(self.tc.epochs - 1)
+        self._save_checkpoint("latest.pt", final_payload)
         emissions = self.carbon.stop()
 
         if self.use_wandb:
@@ -276,16 +296,16 @@ class OfficialTRMTrainer:
 
         results_path = os.path.join(self.config.experiment_dir, "training_results.json")
         with open(results_path, "w") as f:
-            json.dump({"best_puzzle_acc": best_acc, "emissions": emissions}, f, indent=2)
+            json.dump({"best_puzzle_acc": self.best_acc, "emissions": emissions}, f, indent=2)
 
-    def _train_epoch(self, epoch: int, step_bar: tqdm) -> dict:
+    def _train_epoch(self, epoch: int) -> dict:
         self.model.train()
         self.loss_head.train()
 
         totals = {}
         n_batches = 0
 
-        for batch in self.train_loader:
+        for batch in tqdm(self.train_loader, bar_format=self.BAR_FORMAT):
             batch = {k: v.to(self.device) for k, v in batch.items()}
 
             carry = self.loss_head.initial_carry(batch)
@@ -331,16 +351,6 @@ class OfficialTRMTrainer:
             for k, v in normalized.items():
                 totals[k] = totals.get(k, 0) + v
             n_batches += 1
-
-            # Per-batch progress
-            total_batches = len(self.train_loader)
-            step_bar.set_description_str(f"Training Ep {epoch + 1}/{self.tc.epochs}")
-            step_bar.set_postfix_str(
-                f"Batch={n_batches}/{total_batches}  "
-                f"LM={normalized['lm_loss']:.3f}  "
-                f"Steps={normalized['avg_steps']:.1f}  "
-                f"Acc={normalized['exact_accuracy']:.1%}"
-            )
 
         return {k: v / max(1, n_batches) for k, v in totals.items()}
 
@@ -397,28 +407,102 @@ class OfficialTRMTrainer:
             "q_halt_acc": total_q_halt_correct / max(1, n_samples),
         }
 
-    def _save_checkpoint(self, epoch: int, filename: str, best_acc: float = 0.0) -> None:
+    def _safe_torch_save(self, payload: dict, path: str, tag: str) -> bool:
+        """Wrap torch.save with uniform error logging. Returns True on success.
+
+        Broad Exception catch (not OSError) — torch.save can raise pickle errors,
+        __reduce__ failures, and other non-filesystem errors we still want to
+        log-and-continue on rather than crash a long training run.
+        """
+        try:
+            torch.save(payload, path)
+            return True
+        except Exception as e:
+            tqdm.write(f"[{tag}] Save failed: {e}")
+            return False
+
+    def _checkpoint_payload(self, epoch: int) -> dict:
+        """Shared dict builder so all save paths serialize the same fields."""
+        return {
+            "epoch": epoch,
+            "model_state_dict": self.model.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            "ema_state_dict": self.ema.state_dict(),
+            "config": self.config.model_dump(),
+            "seed": self.config.seed,
+            "global_step": self.global_step,
+            "best_puzzle_acc": self.best_acc,
+        }
+
+    def _save_checkpoint(self, filename: str, payload: dict) -> None:
         path = os.path.join(self.config.checkpoint_dir, filename)
-        torch.save(
-            {
-                "epoch": epoch,
-                "model_state_dict": self.model.state_dict(),
-                "optimizer_state_dict": self.optimizer.state_dict(),
-                "ema_state_dict": self.ema.state_dict(),
-                "config": self.config.model_dump(),
-                "seed": self.config.seed,
-                "global_step": self.global_step,
-                "best_puzzle_acc": best_acc,
-            },
-            path,
-        )
+        if not self._safe_torch_save(payload, path, "checkpoint"):
+            return
         if self.hf_api:
             try:
                 self.hf_api.upload_file(
                     path_or_fileobj=path,
                     path_in_repo=f"{self.config.checkpoint_dir}/{filename}",
                     repo_id=self.hf_repo_id,
-                    commit_message=f"checkpoint epoch {epoch + 1} (acc={best_acc:.4f})",
+                    commit_message=f"checkpoint epoch {payload['epoch'] + 1} (acc={payload['best_puzzle_acc']:.4f})",
                 )
             except Exception as e:
                 tqdm.write(f"[HF Hub] Upload failed: {e}")
+
+    def _save_rolling_checkpoint(self, epoch: int, payload: dict) -> None:
+        """Save to rolling-window dir (e.g. D: drive), prune oldest beyond max."""
+        rolling_dir = self.tc.rolling_checkpoint_dir
+        if not rolling_dir:
+            return
+        try:
+            os.makedirs(rolling_dir, exist_ok=True)
+        except OSError as e:
+            tqdm.write(f"[rolling] Cannot create {rolling_dir}: {e}")
+            return
+
+        filename = f"epoch_{epoch + 1:06d}.pt"
+        path = os.path.join(rolling_dir, filename)
+        if not self._safe_torch_save(payload, path, "rolling"):
+            return
+
+        # Prune oldest: zero-padded names sort chronologically
+        existing = sorted(
+            f for f in os.listdir(rolling_dir)
+            if f.startswith("epoch_") and f.endswith(".pt")
+        )
+        excess = len(existing) - self.tc.rolling_checkpoint_max
+        if excess > 0:
+            for old in existing[:excess]:
+                try:
+                    os.remove(os.path.join(rolling_dir, old))
+                except OSError as e:
+                    tqdm.write(f"[rolling] Delete failed for {old}: {e}")
+
+    def _save_milestone_checkpoint(self, pct: int, payload: dict) -> None:
+        """Save a fixed-fraction training milestone (idempotent, never rotated)."""
+        filename = f"milestone_{pct:02d}pct.pt"
+        path = os.path.join(self.config.checkpoint_dir, filename)
+        if os.path.isfile(path):
+            return  # already saved on a prior run — resume-safe
+        if self._safe_torch_save(payload, path, "milestone"):
+            tqdm.write(f"  [milestone] saved {filename} at epoch {payload['epoch'] + 1}")
+
+    def _log_best_to_wandb(self, epoch: int) -> None:
+        """Upload best.pt as a versioned wandb Artifact (non-blocking background sync)."""
+        best_path = os.path.join(self.config.checkpoint_dir, "best.pt")
+        if not os.path.isfile(best_path):
+            return
+        try:
+            artifact = wandb.Artifact(
+                name=f"{self.config.model.model_type.value}-best",
+                type="model",
+                metadata={
+                    "puzzle_acc": float(self.best_acc),
+                    "epoch": epoch + 1,
+                    "global_step": self.global_step,
+                },
+            )
+            artifact.add_file(best_path)
+            wandb.log_artifact(artifact, aliases=["best"])
+        except Exception as e:
+            tqdm.write(f"[wandb] Artifact upload failed: {e}")

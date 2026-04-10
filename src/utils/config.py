@@ -2,7 +2,7 @@ from enum import Enum
 from typing import Optional
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ModelType(str, Enum):
@@ -76,11 +76,26 @@ class TrainingConfig(BaseModel):
     # Logging
     use_wandb: bool = False
     wandb_project: str = "trm-coursework"
+    wandb_entity: str = ""  # empty = use your default wandb user/team
     log_interval: int = 50
     save_interval: int = 500
 
     # HuggingFace Hub checkpoint sync (empty string = disabled)
     hf_repo_id: str = ""
+
+    # Rolling local crash-recovery backup (e.g. external drive)
+    rolling_checkpoint_dir: str = ""        # empty = disabled
+    rolling_checkpoint_max: int = 3         # keep N most recent
+    rolling_checkpoint_interval: int = 100  # save every N epochs
+
+    # Milestone snapshots at fixed fractions of training (never rotated)
+    milestone_checkpoints: bool = False
+    milestone_fractions: list[float] = Field(
+        default_factory=lambda: [0.10, 0.25, 0.50, 0.75]
+    )
+
+    # wandb artifact upload for best.pt on every new best
+    wandb_best_artifact: bool = False
 
     # Official TRM optimizer
     optimizer: str = "adamw"  # "adamw" or "adam_atan2"

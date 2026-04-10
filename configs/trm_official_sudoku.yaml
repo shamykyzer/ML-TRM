@@ -36,10 +36,22 @@ training:
   task_id: 0
 
   use_wandb: true
-  wandb_project: trm-official
+  wandb_project: TRM
+  wandb_entity: shamykyzer
   log_interval: 5
   save_interval: 25
   hf_repo_id: shamykyzer/ml-trm-checkpoints
+
+  # Crash-recovery rolling backup on external NVMe
+  rolling_checkpoint_dir: "D:/ml-trm-checkpoints/sudoku-official"
+  rolling_checkpoint_max: 3
+  rolling_checkpoint_interval: 25
+
+  # Milestone snapshots (10%, 25%, 50%, 75% of training) for thesis analysis
+  milestone_checkpoints: true
+
+  # Upload best.pt as a versioned wandb Artifact on every new best
+  wandb_best_artifact: true
 
 data:
   dataset: sudoku
