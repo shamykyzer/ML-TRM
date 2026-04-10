@@ -17,7 +17,7 @@ Architecture:
 
 import math
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -141,7 +141,7 @@ class TRMReasoningModule(nn.Module):
         super().__init__()
         self.layers = nn.ModuleList(layers)
 
-    def forward(self, hidden_states: torch.Tensor, input_injection: torch.Tensor, **kwargs) -> torch.Tensor:
+    def forward(self, hidden_states: torch.Tensor, input_injection: torch.Tensor, **kwargs: Any) -> torch.Tensor:
         hidden_states = hidden_states + input_injection
         for layer in self.layers:
             hidden_states = layer(hidden_states=hidden_states, **kwargs)

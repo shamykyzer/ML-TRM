@@ -71,13 +71,13 @@ class ACTLossHead(nn.Module):
         super().__init__()
         self.model = model
 
-    def initial_carry(self, *args, **kwargs):
+    def initial_carry(self, *args: Any, **kwargs: Any) -> Any:
         return self.model.initial_carry(*args, **kwargs)
 
     def forward(
         self,
         return_keys: Sequence[str] = (),
-        **model_kwargs,
+        **model_kwargs: Any,
     ) -> Tuple[Any, torch.Tensor, Dict[str, torch.Tensor], Dict[str, torch.Tensor], torch.Tensor]:
         new_carry, outputs = self.model(**model_kwargs)
         labels = new_carry.current_data["labels"]
