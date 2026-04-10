@@ -87,6 +87,12 @@ class TrainingConfig(BaseModel):
     use_weave: bool = True  # Weave traces for wandb.ai/<entity>/<project>/weave/monitors
     log_interval: int = 50
     save_interval: int = 500
+    # How often (epochs) to run the full validation pass. 0 = fall back to
+    # log_interval (legacy behavior where logging and eval were fused). Split
+    # them when eval is expensive — e.g. log_interval=5 for cheap train-metric
+    # printing, eval_interval=50 to run the full test split only 10 times per
+    # 500-epoch run instead of 100 times.
+    eval_interval: int = 0
 
     # HuggingFace Hub checkpoint sync (empty string = disabled)
     hf_repo_id: str = ""

@@ -240,13 +240,17 @@ class OfficialTRMTrainer:
             if self.use_wandb:
                 wandb.log({f"train/{k}": v for k, v in metrics.items()}, step=epoch + 1)
 
-            if (epoch + 1) % self.tc.log_interval == 0:
+            # Eval cadence is independent of log cadence when eval_interval > 0.
+            # eval_interval == 0 preserves legacy behavior (eval fused to log).
+            eff_eval_interval = self.tc.eval_interval or self.tc.log_interval
+            new_best = False
+
+            if (epoch + 1) % eff_eval_interval == 0:
                 last_val = self.evaluate()
 
                 if self.use_wandb:
                     wandb.log({f"val/{k}": v for k, v in last_val.items()}, step=epoch + 1)
 
-                new_best = ""
                 if last_val["puzzle_acc"] > self.best_acc:
                     self.best_acc = last_val["puzzle_acc"]
                     payload = payload or self._checkpoint_payload(epoch)
@@ -254,18 +258,33 @@ class OfficialTRMTrainer:
                     self._save_checkpoint("best.pt", slim)
                     if self.use_wandb and self.tc.wandb_best_artifact:
                         self._log_best_to_wandb(epoch)
-                    new_best = " NEW BEST!"
+                    new_best = True
 
-                tqdm.write(
-                    f"Epoch {epoch + 1}/{self.tc.epochs} - "
-                    f"lm_loss: {metrics['lm_loss']:.4f}  "
-                    f"cell_acc: {last_val['cell_acc']:.4f}  "
-                    f"puzzle_acc: {last_val['puzzle_acc']:.4f}  "
-                    f"best: {self.best_acc:.4f}  "
-                    f"elapsed: {self._fmt_time(elapsed)}  "
-                    f"ETA: {self._fmt_time(eta_sec)}"
-                    f"{new_best}"
-                )
+            if (epoch + 1) % self.tc.log_interval == 0:
+                val_cell = last_val.get("cell_acc") if last_val else None
+                val_puzzle = last_val.get("puzzle_acc") if last_val else None
+                new_best_suffix = " NEW BEST!" if new_best else ""
+
+                if val_cell is None:
+                    # log_interval fired before the first eval_interval — no val yet
+                    tqdm.write(
+                        f"Epoch {epoch + 1}/{self.tc.epochs} - "
+                        f"lm_loss: {metrics['lm_loss']:.4f}  "
+                        f"(no val yet)  "
+                        f"elapsed: {self._fmt_time(elapsed)}  "
+                        f"ETA: {self._fmt_time(eta_sec)}"
+                    )
+                else:
+                    tqdm.write(
+                        f"Epoch {epoch + 1}/{self.tc.epochs} - "
+                        f"lm_loss: {metrics['lm_loss']:.4f}  "
+                        f"cell_acc: {val_cell:.4f}  "
+                        f"puzzle_acc: {val_puzzle:.4f}  "
+                        f"best: {self.best_acc:.4f}  "
+                        f"elapsed: {self._fmt_time(elapsed)}  "
+                        f"ETA: {self._fmt_time(eta_sec)}"
+                        f"{new_best_suffix}"
+                    )
 
                 self._append_log([
                     epoch + 1,
@@ -276,8 +295,8 @@ class OfficialTRMTrainer:
                     f"{metrics['exact_accuracy']:.4f}",
                     f"{metrics['q_halt_accuracy']:.4f}",
                     f"{metrics['avg_steps']:.1f}",
-                    f"{last_val['cell_acc']:.4f}",
-                    f"{last_val['puzzle_acc']:.4f}",
+                    f"{val_cell:.4f}" if val_cell is not None else "",
+                    f"{val_puzzle:.4f}" if val_puzzle is not None else "",
                     f"{self.best_acc:.4f}",
                     f"{elapsed / 60:.1f}",
                 ])
