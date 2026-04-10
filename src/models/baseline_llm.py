@@ -64,7 +64,12 @@ class BaselineLLM(nn.Module):
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-    def forward(self, input_ids, attention_mask=None, labels=None):
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor | None = None,
+        labels: torch.Tensor | None = None,
+    ):
         return self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
