@@ -34,5 +34,9 @@ bitsandbytes>=0.43.0    # 4-bit quantization for QLoRA
 pyyaml>=6.0             # YAML config loading
 python-dotenv>=1.0.0    # load .env for machine-local config / secrets
 
-adam-atan2>=0.1.0         # arctan-bounded optimizer (official TRM recipe)
+# adam-atan2 is OPTIONAL — the official TRM recipe uses it, but current PyPI
+# only ships 0.0.1–0.0.3 and the C-extension build can fail on Windows. The
+# code falls back to AdamW automatically when it's not installed (see
+# trainer "[Optimizer] adam-atan2 not installed, falling back to AdamW").
+# To install manually if you want it: pip install adam-atan2
 
