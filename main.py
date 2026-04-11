@@ -34,6 +34,10 @@ class RunConfig(BaseModel):
     # Pass an explicit non-negative int to override for one run.
     # To opt into a fresh wall-clock seed per run, set `seed: -1` in the YAML.
     seed: int = -1
+    # -1 (default) = inherit YAML's `training.epochs`. Pass a non-negative
+    # int to override for one run. Used by scripts/run_seed.sh --dry-run to
+    # run a 5-epoch pipeline smoke test without editing the YAML.
+    epochs: int = -1
 
 
 @cli.command(singleton=True)
@@ -46,6 +50,9 @@ def main(cfg: RunConfig):
     if cfg.seed < 0:
         cfg.seed = config.seed if config.seed >= 0 else int(time.time()) % (2**31)
     config.seed = cfg.seed
+    if cfg.epochs >= 0:
+        config.training.epochs = cfg.epochs
+        print(f"[Epochs] overridden to {cfg.epochs}")
     apply_gpu_overrides(config)
     print(f"[Seed] {cfg.seed}")
     set_seed(cfg.seed)

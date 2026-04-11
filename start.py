@@ -56,6 +56,67 @@ HF_REMAPPED_CKPT = os.path.join(ROOT, "hf_checkpoints", "ARC", "remapped_for_loc
 REMAP_SCRIPT = os.path.join(ROOT, "scripts", "remap_hf_checkpoint.py")
 VERIFY_SCRIPT = os.path.join(ROOT, "scripts", "verify_remap_loads.py")
 
+# Per-task remapped HF checkpoints used by the seed-variance fine-tune plan.
+# Each of these is a paper-faithful reference checkpoint that the trainer
+# loads via --init-weights to start close to the published accuracy rather
+# than training from scratch on RTX-5070 compute (which would take months).
+HF_REMAPPED_SUDOKU_MLP = os.path.join(ROOT, "hf_checkpoints", "Sudoku-Extreme-mlp", "remapped_for_local.pt")
+HF_REMAPPED_SUDOKU_ATT = os.path.join(ROOT, "hf_checkpoints", "Sudoku-Extreme-att", "remapped_for_local.pt")
+HF_REMAPPED_MAZE = os.path.join(ROOT, "hf_checkpoints", "Maze-Hard", "remapped_for_local.pt")
+
+# The six-seed-per-task fleet plan: machine index (1..6) -> (task, seed).
+# Machines 1-2 run sudoku-mlp seeds 0-1, machines 3-4 run maze seeds 0-1,
+# machine 5 runs the Qwen LLM baseline for the proposal's three-way
+# comparison, machine 6 is the spare (or a second LLM run). Each machine
+# takes one task AND one seed so per-seed output dirs are unambiguous.
+FLEET_PLAN: List[Tuple[int, str, int]] = [
+    (1, "sudoku-mlp", 0),
+    (2, "sudoku-mlp", 1),
+    (3, "maze", 0),
+    (4, "maze", 1),
+    (5, "llm-sudoku", 0),
+    (6, "sudoku-mlp", 2),
+]
+
+# Where per-seed outputs land. MUST be a local non-OneDrive path: the 6-box
+# fleet shares one OneDrive tree for code + data + HF weights (good), but
+# parallel training writes inside the sync folder would corrupt checkpoints
+# during upload. USERPROFILE / $HOME is outside OneDrive on a standard
+# install, so that's the default. Override with the TRM_WORK_DIR env var.
+DEFAULT_WORK_DIR = os.path.join(
+    os.environ.get("USERPROFILE") or os.path.expanduser("~"),
+    "ml-trm-work",
+)
+
+# Task dispatch table — single source of truth for the 4 fine-tuneable tasks.
+# Used by both the interactive launcher and the printed copy-paste commands.
+# An empty init string means "random init" (only llm-sudoku, which loads its
+# own HF weights via transformers). sudoku-att and sudoku-mlp share one model
+# type enum but different YAML configs — trm_official_sudoku.yaml is the
+# attention variant (mlp_t=false), trm_official_sudoku_mlp.yaml is MLP-t.
+TASK_DISPATCH = {
+    "sudoku-mlp": (
+        "configs/trm_official_sudoku_mlp.yaml",
+        HF_REMAPPED_SUDOKU_MLP,
+        "Sudoku-Extreme MLP-t (paper 84.80%)",
+    ),
+    "sudoku-att": (
+        "configs/trm_official_sudoku.yaml",
+        HF_REMAPPED_SUDOKU_ATT,
+        "Sudoku-Extreme attention (paper 77.70%)",
+    ),
+    "maze": (
+        "configs/trm_official_maze.yaml",
+        HF_REMAPPED_MAZE,
+        "Maze-Hard 30x30 (paper 85.30%)",
+    ),
+    "llm-sudoku": (
+        "configs/llm_qwen.yaml",
+        "",
+        "Qwen2.5-0.5B LoRA on Sudoku",
+    ),
+}
+
 
 # ANSI color codes (best-effort; Windows terminals >= Win10 support these)
 CYAN = "\033[96m"
@@ -355,13 +416,155 @@ def _print_stage_status(results: List[Tuple[Stage, bool]], skip_wandb: bool) -> 
     print()
 
 
-def _print_training_menu() -> None:
-    print(f"\n{GREEN}{BOLD}✓ All setup complete!{RESET}\n")
+def _resolve_work_dir() -> str:
+    """Resolve TRM_WORK_DIR, exit loudly if it points inside OneDrive.
 
-    # Build a copy-pasteable "python" command that uses the venv's python
-    # by full path, so `main.py` finds all its deps without the user having
-    # to activate the venv first. On PowerShell, we need a `&` call-operator
-    # prefix so the quoted path is interpreted as a command, not a string.
+    The single most important hygiene check in the 6-box fleet. Every machine
+    syncs code + data + HF weights via OneDrive, but writing training outputs
+    into the sync folder would corrupt checkpoints mid-run as OneDrive uploads
+    partial tensor files. The warning in src/utils/config.py is a belt; this
+    is the suspenders — we refuse to launch if the path looks OneDrive-ish.
+    """
+    work_dir = os.environ.get("TRM_WORK_DIR") or DEFAULT_WORK_DIR
+    if "onedrive" in work_dir.lower():
+        print(f"\n{YELLOW}!!! TRM_WORK_DIR='{work_dir}' looks like a OneDrive path.{RESET}")
+        print(f"{YELLOW}    Parallel training on shared OneDrive will corrupt checkpoints.{RESET}")
+        print(f"{DIM}    Pick a local path and re-run:{RESET}")
+        if platform.system() == "Windows":
+            print(f"      {CYAN}$env:TRM_WORK_DIR = 'C:/ml-trm-work'{RESET}")
+        else:
+            print(f"      {CYAN}export TRM_WORK_DIR=$HOME/ml-trm-work{RESET}")
+        sys.exit(3)
+    return work_dir
+
+
+def _prompt(msg: str, default: str = "") -> str:
+    """Prompt user on stdin, return default on empty input or EOF."""
+    suffix = f" [{default}]" if default else ""
+    try:
+        reply = input(f"{CYAN}{msg}{suffix}: {RESET}").strip()
+    except EOFError:
+        reply = ""
+    return reply or default
+
+
+def _prompt_task_and_seed() -> Tuple[str, int]:
+    """Interactive picker for task label and seed int.
+
+    Shows the 4 tasks as a numbered menu, flags options whose HF init file is
+    missing (such runs still work but start from random init, so they are
+    exploratory rather than paper-faithful). Defaults to seed 0 — the first
+    row of FLEET_PLAN, a safe starter on any machine.
+    """
+    tasks = list(TASK_DISPATCH.keys())
+    print(f"\n{BOLD}Which task?{RESET}")
+    for i, t in enumerate(tasks, 1):
+        _, init, desc = TASK_DISPATCH[t]
+        if init and not os.path.exists(init):
+            suffix = f"  {YELLOW}(HF init missing — will use random init){RESET}"
+        else:
+            suffix = ""
+        print(f"  {CYAN}{i}{RESET}) {t:<12s}  {DIM}{desc}{RESET}{suffix}")
+
+    choice = _prompt("Pick 1-4", default="1")
+    try:
+        task = tasks[int(choice) - 1]
+    except (ValueError, IndexError):
+        print(f"{YELLOW}!!! Invalid task choice '{choice}'.{RESET}")
+        sys.exit(2)
+
+    seed_str = _prompt("Seed (non-negative int)", default="0")
+    try:
+        seed = int(seed_str)
+        if seed < 0:
+            raise ValueError
+    except ValueError:
+        print(f"{YELLOW}!!! Seed must be a non-negative integer, got '{seed_str}'.{RESET}")
+        sys.exit(2)
+
+    return task, seed
+
+
+def _dispatch_training(task: str, seed: int, dry_run: bool = False) -> None:
+    """Build main.py argv and exec, routing checkpoints to a per-seed local dir.
+
+    Python twin of `scripts/run_seed.sh <task> <seed>`. Sets TRM_CHECKPOINT_DIR
+    and TRM_EXPERIMENT_DIR in the child env so the trainer writes to
+    <TRM_WORK_DIR>/<task>-seed<N>/, never into the OneDrive-synced repo. Shell
+    launchers are kept for automation (cron, CI); this path is for users who
+    drive everything from start.py interactively.
+    """
+    config, init, description = TASK_DISPATCH[task]
+
+    work_dir = _resolve_work_dir()
+    task_dir = os.path.join(work_dir, f"{task}-seed{seed}")
+    os.makedirs(task_dir, exist_ok=True)
+
+    env = os.environ.copy()
+    env["TRM_CHECKPOINT_DIR"] = task_dir
+    env["TRM_EXPERIMENT_DIR"] = task_dir
+
+    args = [PYTHON, "main.py", "--mode", "train", "--config", config, "--seed", str(seed)]
+    if init and os.path.exists(init):
+        args.extend(["--init-weights", init])
+    if dry_run:
+        args.extend(["--epochs", "5"])
+
+    bar = "=" * 64
+    print(f"\n{BOLD}{bar}{RESET}")
+    print(f"  task               : {CYAN}{task}{RESET}  {DIM}({description}){RESET}")
+    print(f"  seed               : {CYAN}{seed}{RESET}")
+    print(f"  config             : {config}")
+    init_label = init if (init and os.path.exists(init)) else "<none, random init>"
+    print(f"  init_weights       : {init_label}")
+    print(f"  TRM_CHECKPOINT_DIR : {task_dir}")
+    print(f"  TRM_EXPERIMENT_DIR : {task_dir}")
+    print(f"  dry-run            : {'YES (5 epochs)' if dry_run else 'no'}")
+    print(f"{BOLD}{bar}{RESET}\n")
+
+    result = subprocess.run(args, env=env)
+    sys.exit(result.returncode)
+
+
+def _interactive_launcher() -> None:
+    """Prompt the user to pick an action after all setup stages are ready.
+
+    Main entry for the 6-box workflow: re-run `python start.py` per seed,
+    pick a task + seed from the menu, train. Option 3 is the Regime A
+    one-shot (no training); option 4 dumps the full copy-paste command
+    list for scripted workflows.
+    """
+    print(f"\n{BOLD}What do you want to run?{RESET}")
+    print(f"  {CYAN}1{RESET}) Dry run         {DIM}(5-epoch pipeline smoke test — always do this first){RESET}")
+    print(f"  {CYAN}2{RESET}) Seed-variance   {DIM}(full fine-tune from HF init — the 6-machine plan){RESET}")
+    print(f"  {CYAN}3{RESET}) Evaluate HF     {DIM}(Regime A — all 3 paper checkpoints, no training){RESET}")
+    print(f"  {CYAN}4{RESET}) Show commands   {DIM}(print copy-paste commands and exit){RESET}")
+    print(f"  {CYAN}Q{RESET}) Quit")
+
+    choice = _prompt("Pick", default="Q").upper()
+
+    if choice in ("Q", ""):
+        print(f"\n{DIM}Nothing launched. Re-run `python start.py` when ready.{RESET}\n")
+        return
+
+    if choice == "3":
+        _run([PYTHON, os.path.join("scripts", "eval_hf_checkpoints.py")])
+        return
+
+    if choice == "4":
+        _print_copy_paste_commands()
+        return
+
+    if choice in ("1", "2"):
+        task, seed = _prompt_task_and_seed()
+        _dispatch_training(task, seed, dry_run=(choice == "1"))
+        return
+
+    print(f"{YELLOW}!!! Unknown choice '{choice}'.{RESET}")
+
+
+def _print_copy_paste_commands() -> None:
+    """Print all manual training commands. Fallback for scripted workflows."""
     py_quoted = f'"{PYTHON}"'
     is_powershell = (
         platform.system() == "Windows"
@@ -369,50 +572,90 @@ def _print_training_menu() -> None:
     )
     py = f"& {py_quoted}" if is_powershell else py_quoted
 
-    print(f"{BOLD}Train:{RESET} {DIM}(copy-paste as-is — no venv activation needed){RESET}")
-    print(f"  {CYAN}{py} main.py --mode train --config configs/trm_official_sudoku.yaml --seed 42{RESET}")
-    print(f"  {CYAN}{py} main.py --mode train --config configs/trm_official_maze.yaml --seed 42{RESET}")
-    print(f"  {CYAN}{py} main.py --mode train --config configs/llm_config.yaml --seed 42{RESET}     {DIM}# GPT-2{RESET}")
-    print(f"  {CYAN}{py} main.py --mode train --config configs/llm_qwen.yaml --seed 42{RESET}       {DIM}# Qwen2.5-0.5B{RESET}")
-    print(f"  {CYAN}{py} main.py --mode train --config configs/llm_smollm.yaml --seed 42{RESET}     {DIM}# SmolLM2-360M{RESET}")
-    print(f"  {CYAN}{py} main.py --mode train --config configs/llm_llama.yaml --seed 42{RESET}      {DIM}# Llama-3.2-1B{RESET}\n")
+    print(f"\n{BOLD}Regime A — Evaluate paper checkpoints (no training):{RESET}")
+    print(f"  {CYAN}{py} scripts/eval_hf_checkpoints.py{RESET}\n")
 
-    # Only surface --init-weights commands when the remapped checkpoint is on
-    # disk AND verified. The transfer stage already guaranteed both by the
-    # time we reach this menu — but re-check here so the menu stays honest if
-    # the file gets deleted between stage-check and menu-print.
-    if os.path.exists(HF_REMAPPED_CKPT):
-        init = "hf_checkpoints/ARC/remapped_for_local.pt"
-        print(f"{BOLD}Train from ARC reference init weights (transfer learning):{RESET}")
-        print(f"  {DIM}Starts fresh (global_step=0, optimizer reset) with ~99.8% of params{RESET}")
-        print(f"  {DIM}pre-initialized from the HF reference TRM — embeddings/heads are{RESET}")
-        print(f"  {DIM}the only fresh-random pieces.{RESET}")
-        print(f"  {CYAN}{py} main.py --mode train --config configs/trm_official_sudoku.yaml --init-weights {init} --seed 42{RESET}")
-        print(f"  {CYAN}{py} main.py --mode train --config configs/trm_official_maze.yaml --init-weights {init} --seed 42{RESET}\n")
+    print(f"{BOLD}Regime B — Seed-variance fine-tune:{RESET} {DIM}(direct main.py){RESET}")
+    for task, (config, init, desc) in TASK_DISPATCH.items():
+        init_arg = f" --init-weights {init}" if init and os.path.exists(init) else ""
+        print(f"  {CYAN}{py} main.py --mode train --config {config}{init_arg} --seed 0{RESET} {DIM}# {task}{RESET}")
+    print()
+
+    print(f"{BOLD}...or the shell launchers (they auto-set TRM_CHECKPOINT_DIR per seed):{RESET}")
+    if platform.system() == "Windows":
+        print(f"  {CYAN}scripts/run_seed.ps1 -Task sudoku-mlp -Seed 0{RESET}")
+        print(f"  {CYAN}scripts/run_seed.ps1 -Task sudoku-mlp -Seed 0 -DryRun{RESET}  {DIM}# 5-epoch smoke{RESET}")
+    else:
+        print(f"  {CYAN}scripts/run_seed.sh sudoku-mlp 0{RESET}")
+        print(f"  {CYAN}scripts/run_seed.sh sudoku-mlp 0 --dry-run{RESET}  {DIM}# 5-epoch smoke{RESET}")
+    print()
+
+    print(f"{BOLD}Other (non-fleet) TRM and LLM configs:{RESET}")
+    print(f"  {CYAN}{py} main.py --mode train --config configs/trm_sudoku.yaml --seed 0{RESET}")
+    print(f"  {CYAN}{py} main.py --mode train --config configs/trm_maze.yaml --seed 0{RESET}")
+    print(f"  {CYAN}{py} main.py --mode train --config configs/llm_config.yaml --seed 0{RESET}  {DIM}# GPT-2{RESET}")
+    print(f"  {CYAN}{py} main.py --mode train --config configs/llm_smollm.yaml --seed 0{RESET}  {DIM}# SmolLM2-360M{RESET}")
+    print(f"  {CYAN}{py} main.py --mode train --config configs/llm_llama.yaml --seed 0{RESET}   {DIM}# Llama-3.2-1B{RESET}\n")
 
     print(f"{BOLD}Evaluate (after training):{RESET}")
     print(f"  {CYAN}{py} main.py --mode eval --config configs/<name>.yaml --checkpoint models/<name>/best.pt{RESET}\n")
 
     print(f"{BOLD}Resume from last checkpoint:{RESET}")
-    print(f"  {CYAN}{py} main.py --mode train --config configs/<name>.yaml --resume models/<name>/latest.pt --seed 42{RESET}\n")
+    print(f"  {CYAN}{py} main.py --mode train --config configs/<name>.yaml --resume models/<name>/latest.pt --seed 0{RESET}\n")
 
     print(f"{BOLD}Reproducibility — seed convention:{RESET}")
-    print(f"  {DIM}Every training command above passes {RESET}{CYAN}--seed 42{RESET}{DIM} explicitly so the seed is")
-    print(f"  visible in shell history and wandb run names. Omitting --seed also")
-    print(f"  works — main.py then inherits the {RESET}{CYAN}seed:{RESET}{DIM} field from the YAML config")
-    print(f"  (also 42 by default). To run a stochastic sweep, pass a different int")
-    print(f"  per run ({RESET}{CYAN}--seed 1{RESET}{DIM}, {RESET}{CYAN}--seed 2{RESET}{DIM}, ...) or set {RESET}{CYAN}seed: -1{RESET}{DIM} in the YAML to get")
-    print(f"  a fresh wall-clock seed every run.{RESET}\n")
-
-    print(f"{DIM}Why the full path? Your system `python` isn't the venv's python, so a bare{RESET}")
-    print(f"{DIM}`python main.py` hits ModuleNotFoundError. The full-path form dodges that{RESET}")
-    print(f"{DIM}and works identically whether or not the venv is activated.{RESET}\n")
-
-    print(f"{DIM}Prefer activating the venv instead? {RESET}{CYAN}{ACTIVATE_HINT}{RESET}{DIM} — then{RESET}")
-    print(f"{DIM}you can drop the full path and use bare `python main.py ...`{RESET}\n")
+    print(f"  {DIM}Every command above passes {RESET}{CYAN}--seed N{RESET}{DIM} explicitly so the seed shows up in{RESET}")
+    print(f"  {DIM}shell history AND the wandb run name. Omitting --seed inherits the{RESET}")
+    print(f"  {DIM}{RESET}{CYAN}seed:{RESET}{DIM} field from the YAML (default 42 — reproducible). Set {RESET}{CYAN}seed: -1{RESET}{DIM}{RESET}")
+    print(f"  {DIM}in the YAML for wall-clock seeding.{RESET}\n")
 
     print(f"{DIM}Tip: run `python start.py status` any time to re-check stages.{RESET}")
-    print(f"{DIM}Tip: Weave traces for monitors appear at wandb.ai/<entity>/<project>/weave/monitors{RESET}\n")
+    print(f"{DIM}Tip: Weave traces appear at wandb.ai/<entity>/<project>/weave/monitors{RESET}\n")
+
+
+def _print_training_menu() -> None:
+    print(f"\n{GREEN}{BOLD}✓ All setup complete!{RESET}\n")
+
+    # 6-machine fleet assignment table. Each operator picks the row matching
+    # their box — seeds 0..5 across tasks give the full seed-variance set the
+    # coursework report needs for mean ± std on the three-way model comparison.
+    print(f"{BOLD}6-Machine Fleet Plan:{RESET} {DIM}(pick the row for this box){RESET}")
+    print(f"  {DIM}machine   task          seed{RESET}")
+    for idx, task, seed in FLEET_PLAN:
+        print(f"  {CYAN}{idx:<9}{RESET} {task:<13s} {CYAN}{seed}{RESET}")
+    print()
+
+    # TRM_WORK_DIR status + reminder. The launcher will exit(3) later if this
+    # resolves inside OneDrive; this printout is the friendly early warning.
+    print(f"{BOLD}Work dir for training outputs:{RESET}")
+    current_work = os.environ.get("TRM_WORK_DIR")
+    if current_work:
+        work_label = f"{CYAN}{current_work}{RESET}"
+    else:
+        work_label = f"{CYAN}{DEFAULT_WORK_DIR}{RESET}  {DIM}(default — TRM_WORK_DIR not set){RESET}"
+    print(f"  TRM_WORK_DIR = {work_label}")
+    if platform.system() == "Windows":
+        print(f"  {DIM}To set for this shell: {RESET}{CYAN}$env:TRM_WORK_DIR = 'C:/ml-trm-work'{RESET}")
+    else:
+        print(f"  {DIM}To set for this shell: {RESET}{CYAN}export TRM_WORK_DIR=$HOME/ml-trm-work{RESET}")
+    print(f"  {DIM}(MUST be a local non-OneDrive path — parallel runs on the shared{RESET}")
+    print(f"  {DIM} OneDrive would corrupt each machine's checkpoints during upload.){RESET}\n")
+
+    # wandb reminder — re-check here even though the setup stage covered it,
+    # because it's common to lose the netrc entry when switching machines.
+    if _wandb_ready():
+        print(f"{BOLD}wandb:{RESET} {GREEN}✓ logged in{RESET}  {DIM}(runs will track to your wandb project){RESET}\n")
+    else:
+        print(f"{BOLD}wandb:{RESET} {YELLOW}not logged in{RESET}  {DIM}(runs still train, just without cloud tracking){RESET}")
+        if os.path.exists(WANDB):
+            print(f"  {CYAN}\"{WANDB}\" login{RESET}  {DIM}# paste your key from wandb.ai/authorize{RESET}\n")
+        else:
+            print(f"  {CYAN}wandb login{RESET}  {DIM}# paste your key from wandb.ai/authorize{RESET}\n")
+
+    # Hand off to the interactive launcher. If the user picks a task, it
+    # dispatches via subprocess.run + sys.exit — we never return here. If
+    # they quit or pick "show commands", we fall through and exit naturally.
+    _interactive_launcher()
 
 
 # ============================================================

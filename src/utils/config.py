@@ -174,3 +174,22 @@ def _apply_env_overrides(cfg: ExperimentConfig) -> None:
         cfg.data.data_dir = os.environ["TRM_DATA_DIR"]
     if os.getenv("TRM_CHECKPOINT_DIR"):
         cfg.checkpoint_dir = os.environ["TRM_CHECKPOINT_DIR"]
+    if os.getenv("TRM_EXPERIMENT_DIR"):
+        cfg.experiment_dir = os.environ["TRM_EXPERIMENT_DIR"]
+
+    # Multi-machine safety: warn if training outputs land inside a OneDrive-
+    # synced path. OneDrive rewrites files under your feet during upload,
+    # which corrupts mid-write checkpoints and creates rename conflicts when
+    # two machines touch the same file. Training-output dirs should live on
+    # local non-synced storage; set TRM_CHECKPOINT_DIR / TRM_EXPERIMENT_DIR
+    # to a local path (e.g. C:/ml-trm-work/<task>-seed<N>) on each machine.
+    for label, path in (
+        ("checkpoint_dir", cfg.checkpoint_dir),
+        ("experiment_dir", cfg.experiment_dir),
+    ):
+        if "onedrive" in path.lower():
+            print(
+                f"[config] WARNING: {label}='{path}' looks like a OneDrive "
+                f"path. Parallel runs on shared OneDrive will corrupt "
+                f"checkpoints. Set TRM_{label.upper()} to a local path."
+            )
