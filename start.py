@@ -46,6 +46,16 @@ else:
 REQUIREMENTS_HASH_FILE = os.path.join(VENV_DIR, ".trm_requirements_hash")
 REQUIREMENTS_TXT = os.path.join(ROOT, "requirements.txt")
 
+# Transfer-learning artifacts: the HF reference TRM checkpoint (trained on
+# ARC-AGI-2) can be remapped into our local TRMOfficial shape and used as
+# `--init-weights` to transfer the ~99.8% reasoning core. This whole pipeline
+# is optional — only runs when the source file is present on disk. See
+# scripts/remap_hf_checkpoint.py for the full rationale.
+HF_SOURCE_CKPT = os.path.join(ROOT, "hf_checkpoints", "ARC", "step_723914")
+HF_REMAPPED_CKPT = os.path.join(ROOT, "hf_checkpoints", "ARC", "remapped_for_local.pt")
+REMAP_SCRIPT = os.path.join(ROOT, "scripts", "remap_hf_checkpoint.py")
+VERIFY_SCRIPT = os.path.join(ROOT, "scripts", "verify_remap_loads.py")
+
 
 # ANSI color codes (best-effort; Windows terminals >= Win10 support these)
 CYAN = "\033[96m"
@@ -144,6 +154,27 @@ def _wandb_instructions() -> None:
 
     print(f"\n{BOLD}→ To skip wandb and continue anyway:{RESET}")
     print(f"   {CYAN}python start.py --skip-wandb{RESET}")
+
+
+def _setup_transfer() -> None:
+    """Remap the HF reference checkpoint and verify it loads cleanly.
+
+    Idempotent: always regenerates the remapped file when this stage fires,
+    on the theory that if we got here something was either missing or broken,
+    and rebuilding from source is cheaper than trying to diagnose which.
+    Both sub-scripts are streamed so the user sees the full transfer report
+    and the pass/fail verdict inline — that's the whole point of automating
+    this (no more eyeballing trainer startup logs to catch a silent breakage).
+    """
+    if not os.path.exists(HF_SOURCE_CKPT):
+        # User isn't doing transfer learning — nothing to do.
+        print(f"{DIM}No source checkpoint at {HF_SOURCE_CKPT} — skipping.{RESET}")
+        return
+    print(f"{CYAN}Remapping HF reference checkpoint → local TRMOfficial shape...{RESET}")
+    _run([PYTHON, REMAP_SCRIPT])
+    print(f"\n{CYAN}Verifying remapped checkpoint loads into a fresh TRMOfficial...{RESET}")
+    _run([PYTHON, VERIFY_SCRIPT])
+    print(f"\n{GREEN}✓ Transfer-learning init weights verified and ready.{RESET}")
 
 
 def _bootstrap_data() -> None:
@@ -245,6 +276,35 @@ def _wandb_ready() -> bool:
     return False
 
 
+def _transfer_ready() -> bool:
+    """Remapped HF checkpoint exists AND verifies cleanly — or source isn't present.
+
+    Three outcomes:
+      1. No source checkpoint on disk → N/A, return ready (most users).
+      2. Source present, remapped file missing → not ready (build it).
+      3. Both present → delegate to scripts/verify_remap_loads.py via the venv
+         python. Exit code 0 means load report matched exactly: zero unexpected
+         keys, and the only "missing" keys are the intentionally-skipped
+         embed/task_emb/lm_head/rotary buffers. Anything else → not ready,
+         force a rebuild.
+
+    Stays silent (captures output) because this runs during the status
+    display. The loud re-run happens in _setup_transfer if this returns False.
+    """
+    if not os.path.exists(HF_SOURCE_CKPT):
+        return True  # N/A — user isn't doing transfer learning
+    if not os.path.exists(HF_REMAPPED_CKPT):
+        return False
+    if not os.path.exists(PYTHON):
+        return False  # venv stage handles this first; we'll re-check next run
+    result = subprocess.run(
+        [PYTHON, VERIFY_SCRIPT],
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
 def _data_ready() -> bool:
     return (
         os.path.exists(os.path.join(ROOT, "data/sudoku-extreme-full/train/all__inputs.npy"))
@@ -266,11 +326,15 @@ class Stage:
 
 
 STAGES: List[Stage] = [
-    Stage("venv",  "Python venv with CUDA torch",   _venv_ready,  _setup_venv),
-    Stage("sync",  "Venv matches requirements.txt", _sync_ready,  _sync_venv),
-    Stage("env",   "Machine-local .env file",       _env_ready,   _bootstrap_env),
-    Stage("wandb", "wandb logged in",               _wandb_ready, _wandb_instructions, blocking=False),
-    Stage("data",  "Sudoku + Maze datasets",        _data_ready,  _bootstrap_data),
+    Stage("venv",     "Python venv with CUDA torch",    _venv_ready,     _setup_venv),
+    Stage("sync",     "Venv matches requirements.txt",  _sync_ready,     _sync_venv),
+    Stage("env",      "Machine-local .env file",        _env_ready,      _bootstrap_env),
+    Stage("wandb",    "wandb logged in",                _wandb_ready,    _wandb_instructions, blocking=False),
+    # Non-blocking because most users won't have the 2.47 GB source file —
+    # _transfer_ready() returns True when the source is absent, so this stage
+    # silently passes for anyone not doing ARC→local transfer learning.
+    Stage("transfer", "HF reference remapped + verified", _transfer_ready, _setup_transfer, blocking=False),
+    Stage("data",     "Sudoku + Maze datasets",         _data_ready,     _bootstrap_data),
 ]
 
 
@@ -312,6 +376,19 @@ def _print_training_menu() -> None:
     print(f"  {CYAN}{py} main.py --mode train --config configs/llm_qwen.yaml --seed 42{RESET}       {DIM}# Qwen2.5-0.5B{RESET}")
     print(f"  {CYAN}{py} main.py --mode train --config configs/llm_smollm.yaml --seed 42{RESET}     {DIM}# SmolLM2-360M{RESET}")
     print(f"  {CYAN}{py} main.py --mode train --config configs/llm_llama.yaml --seed 42{RESET}      {DIM}# Llama-3.2-1B{RESET}\n")
+
+    # Only surface --init-weights commands when the remapped checkpoint is on
+    # disk AND verified. The transfer stage already guaranteed both by the
+    # time we reach this menu — but re-check here so the menu stays honest if
+    # the file gets deleted between stage-check and menu-print.
+    if os.path.exists(HF_REMAPPED_CKPT):
+        init = "hf_checkpoints/ARC/remapped_for_local.pt"
+        print(f"{BOLD}Train from ARC reference init weights (transfer learning):{RESET}")
+        print(f"  {DIM}Starts fresh (global_step=0, optimizer reset) with ~99.8% of params{RESET}")
+        print(f"  {DIM}pre-initialized from the HF reference TRM — embeddings/heads are{RESET}")
+        print(f"  {DIM}the only fresh-random pieces.{RESET}")
+        print(f"  {CYAN}{py} main.py --mode train --config configs/trm_official_sudoku.yaml --init-weights {init} --seed 42{RESET}")
+        print(f"  {CYAN}{py} main.py --mode train --config configs/trm_official_maze.yaml --init-weights {init} --seed 42{RESET}\n")
 
     print(f"{BOLD}Evaluate (after training):{RESET}")
     print(f"  {CYAN}{py} main.py --mode eval --config configs/<name>.yaml --checkpoint models/<name>/best.pt{RESET}\n")

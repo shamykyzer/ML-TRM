@@ -140,7 +140,14 @@ def evaluate_official(
 ) -> dict:
     """Evaluate an official TRM model with full ACT steps."""
     device = torch.device(config.device if torch.cuda.is_available() else "cpu")
-    model.to(device)
+    # Cast to forward_dtype (typically bf16) BEFORE the first forward — the
+    # CastedEmbedding inside the model casts its output to forward_dtype, so
+    # if the linear layers are still fp32 (PyTorch default), the first matmul
+    # crashes with a dtype mismatch. The trainer already does this in
+    # OfficialTRMTrainer.__init__ at trainer_official.py:163-165; eval was
+    # missing the equivalent cast.
+    forward_dtype = getattr(torch, config.model.forward_dtype, torch.bfloat16)
+    model.to(device=device, dtype=forward_dtype)
 
     carbon = CarbonTracker(
         f"{config.model.model_type.value}_inference",
@@ -258,12 +265,34 @@ def load_and_evaluate(
             "mlp_t": config.model.mlp_t,
         }
         model = TRMOfficial(model_config)
-        model.load_state_dict(checkpoint["model_state_dict"])
+
+        # strict=False so we can load remapped HF reference checkpoints
+        # (e.g. hf_checkpoints/Sudoku-Extreme-mlp/remapped_for_local.pt) that
+        # only contain model weights — no optimizer/EMA/global_step. The only
+        # legitimately-missing keys are the rotary_emb buffers (deterministic,
+        # reconstructed by RotaryEmbedding.__init__). A trainer-saved
+        # checkpoint will have everything and report 0/0.
+        result = model.load_state_dict(checkpoint["model_state_dict"], strict=False)
+        missing = list(result.missing_keys)
+        unexpected = list(result.unexpected_keys)
+        print(f"[Eval] Loaded {len(checkpoint['model_state_dict'])} keys "
+              f"(missing: {len(missing)}, unexpected: {len(unexpected)})")
+        if unexpected:
+            print(f"[Eval] WARNING: unexpected keys (should be zero): {unexpected[:5]}"
+                  f"{' ...' if len(unexpected) > 5 else ''}")
+        non_rotary_missing = [k for k in missing if "rotary_emb" not in k]
+        if non_rotary_missing:
+            print(f"[Eval] WARNING: missing keys beyond rotary_emb buffers: "
+                  f"{non_rotary_missing[:5]}{' ...' if len(non_rotary_missing) > 5 else ''}")
+        if "source" in checkpoint:
+            print(f"[Eval] Checkpoint source: {checkpoint['source']}")
 
         ema = None
         if "ema_state_dict" in checkpoint:
             ema = EMA(model, decay=config.training.ema_decay)
             ema.load_state_dict(checkpoint["ema_state_dict"])
+        else:
+            print("[Eval] No EMA shadow in checkpoint — evaluating raw model weights")
 
         results = evaluate_official(model, test_loader, config, ema=ema)
 

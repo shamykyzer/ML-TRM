@@ -1,35 +1,35 @@
 model:
   model_type: trm_official_sudoku
   d_model: 512
-  # ff_hidden = 1536 matches the "Less is More" (Jolicoeur-Martineau, 2025) TRM
-  # reference architecture. The reference SwiGLU applies the Llama convention
-  # (ff_hidden ≈ 2/3 × hidden × expansion, rounded to a multiple of 256), so
-  # hidden=512, expansion=4 → ff_hidden=1536. This is also the shape expected
-  # by the HF reference checkpoint (hf_checkpoints/ARC/step_723914), enabling the
-  # remap-and-fine-tune path in scripts/remap_hf_checkpoint.py.
+  # ff_hidden = 1536 for the regular FFN. The local SwiGLU computes
+  # ff_hidden = int(hidden_size * expansion), where expansion is derived from
+  # ff_hidden / d_model = 3.0 here, giving 1536. The token-mixer (mlp_t) does
+  # NOT use this formula — it pins the Llama-rounded ff_hidden=512 inside
+  # TRMBlock via the explicit `ff_hidden=` kwarg, matching the published
+  # Sanjin2024 sudoku-mlp checkpoint.
   ff_hidden: 1536
   n_heads: 8
   vocab_size: 11
   seq_len: 81
   num_classes: 11
 
-  # Official TRM architecture (paper-faithful for the attention variant)
+  # Official TRM architecture (paper-faithful for the MLP variant)
   H_cycles: 3
-  L_cycles: 6                   # paper-faithful (Sanjin sudoku-att all_config.yaml); was 4
+  L_cycles: 6                   # Sanjin2024 all_config.yaml — paper-faithful (was 4 in attention variant)
   L_layers: 2
   num_task_types: 2
   task_emb_len: 16
   task_emb_ndim: 512
   halt_max_steps: 16
   halt_exploration_prob: 0.1
-  no_ACT_continue: true         # paper-faithful (Sanjin sudoku-att all_config.yaml); was false
+  no_ACT_continue: true         # Sanjin2024 all_config.yaml — paper-faithful (was false in attention variant)
   forward_dtype: bfloat16
-  mlp_t: false                  # attention variant — 77.70% target (use trm_official_sudoku_mlp.yaml for the 84.80% MLP variant)
+  mlp_t: true                   # MLP token-mixer variant — the headline 84.80% Sudoku result
 
 training:
   lr: 0.0001
   betas: [0.9, 0.95]
-  weight_decay: 1.0       # paper-faithful (Sanjin sudoku-att all_config.yaml); was 0.1
+  weight_decay: 1.0       # paper-faithful (Sanjin sudoku-mlp all_config.yaml); was 0.1
   warmup_steps: 2000
   batch_size: 64
   epochs: 500
@@ -50,7 +50,7 @@ training:
   hf_repo_id: ""                      # set via TRM_HF_REPO_ID in .env
 
   # Crash-recovery rolling backup — set via TRM_ROLLING_CHECKPOINT_DIR in .env
-  # (blank = disabled; example: D:/ml-trm-checkpoints/sudoku-official)
+  # (blank = disabled; example: D:/ml-trm-checkpoints/sudoku-mlp)
   rolling_checkpoint_dir: ""
   rolling_checkpoint_max: 3
   rolling_checkpoint_interval: 25
@@ -68,5 +68,8 @@ data:
 
 seed: 42
 device: cuda
-checkpoint_dir: "C:/TRM checkpoints/sudoku-official"
-experiment_dir: experiments/sudoku-official
+# Separate checkpoint dir from the attention-variant config so neither training
+# can clobber the other's latest.pt. Initialize from
+# hf_checkpoints/Sudoku-Extreme-mlp/remapped_for_local.pt via --init-weights.
+checkpoint_dir: "C:/TRM checkpoints/sudoku-mlp"
+experiment_dir: experiments/sudoku-mlp

@@ -43,6 +43,17 @@ def trunc_normal_init_(tensor: torch.Tensor, std: float = 1.0) -> torch.Tensor:
     return tensor
 
 
+def llama_rounded_ff(hidden: int, expansion: float = 4.0, multiple: int = 256) -> int:
+    """Llama-style ff_hidden: round_up_to_multiple(int(2/3 * hidden * expansion), multiple).
+
+    Used by the mlp_t (token-mixer) branch in TRMBlock to match the shapes of
+    published reference checkpoints (e.g. Sanjin2024/TinyRecursiveModels-Sudoku-Extreme-mlp),
+    which were trained with the official codebase's Llama-style rounding.
+    """
+    raw = int((2 / 3) * hidden * expansion)
+    return ((raw + multiple - 1) // multiple) * multiple
+
+
 class TRMConfig(BaseModel):
     """Configuration for the official TRM model."""
     batch_size: int = 32
@@ -100,9 +111,17 @@ class TRMBlock(nn.Module):
         self.config = config
 
         if config.mlp_t:
+            # Token-mixer: paper uses Llama-rounded ff_hidden with the
+            # paper-true expansion=4, regardless of what `config.expansion`
+            # ends up as for the regular FFN. The local SwiGLU's default
+            # `int(hidden * expansion)` formula cannot produce 512 for
+            # hidden=97 under any expansion that ALSO gives 1536 for
+            # hidden=512, so we pass ff_hidden explicitly. This matches the
+            # published reference checkpoints (Sanjin2024/...Sudoku-Extreme-mlp).
+            mlp_t_hidden = config.seq_len + config.task_emb_len
             self.mlp_t = SwiGLU(
-                hidden_size=config.seq_len + config.task_emb_len,
-                expansion=config.expansion,
+                hidden_size=mlp_t_hidden,
+                ff_hidden=llama_rounded_ff(mlp_t_hidden, expansion=4.0),
             )
         else:
             self.self_attn = Attention(

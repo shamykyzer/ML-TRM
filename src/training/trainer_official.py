@@ -102,13 +102,37 @@ def _build_optimizer(model: nn.Module, config: ExperimentConfig):
         })
 
     if tc.optimizer == "adam_atan2":
+        # Prefer the official CUDA build (`adam_atan2.AdamATan2`) when it is
+        # actually usable — on most systems (and always on Windows CPU-builds)
+        # the PyPI `adam-atan2` package ships only a wrapper around a CUDA
+        # kernel that is NOT bundled, so importing it raises ModuleNotFoundError
+        # for `adam_atan2_backend`. Fall back to the pure-Python
+        # `adam_atan2_pytorch` implementation (lucidrains), which is the same
+        # algorithm and is what the "Less is More" recipe calls for. We do NOT
+        # silently fall back to AdamW — AdamATan2 is mandatory for official runs.
+        AdamAtan2Cls = None
+        impl = None
         try:
-            from adam_atan2 import AdamAtan2
-            optimizer = AdamAtan2(param_groups, betas=tc.betas)
-            print("[Optimizer] Using AdamAtan2")
-            return optimizer
-        except ImportError:
-            print("[Optimizer] adam-atan2 not installed, falling back to AdamW")
+            from adam_atan2 import AdamATan2 as _CudaAdamATan2  # type: ignore
+            AdamAtan2Cls = _CudaAdamATan2
+            impl = "adam_atan2 (CUDA backend)"
+        except Exception:
+            try:
+                from adam_atan2_pytorch import AdamAtan2 as _PyAdamAtan2  # type: ignore
+                AdamAtan2Cls = _PyAdamAtan2
+                impl = "adam_atan2_pytorch (pure Python)"
+            except ImportError as e:
+                raise ImportError(
+                    "AdamATan2 is required for the official TRM recipe "
+                    "(Less-is-More paper). Neither `adam_atan2` (with its CUDA "
+                    "backend) nor `adam_atan2_pytorch` (pure Python) is "
+                    "importable. Install the pure-Python version with:\n"
+                    "    pip install adam-atan2-pytorch\n"
+                    "Do NOT switch to AdamW for official runs."
+                ) from e
+        optimizer = AdamAtan2Cls(param_groups, betas=tc.betas)
+        print(f"[Optimizer] Using AdamATan2 via {impl}")
+        return optimizer
 
     optimizer = torch.optim.AdamW(param_groups, betas=tc.betas)
     print("[Optimizer] Using AdamW")
@@ -126,6 +150,7 @@ class OfficialTRMTrainer:
         val_loader: DataLoader,
         config: ExperimentConfig,
         resume_checkpoint: str = "",
+        init_weights: str = "",
     ):
         self.model = model
         self.loss_head = loss_head
@@ -182,6 +207,22 @@ class OfficialTRMTrainer:
         else:
             self.hf_api = None
 
+        # Init weights (transfer learning) — load model weights only, start
+        # optimizer/step/epoch fresh. Mutually exclusive with resume_checkpoint
+        # (main.py enforces this). Use --init-weights to bootstrap training
+        # from a pretrained checkpoint (e.g. the remapped HF reference weights)
+        # without inheriting its training state.
+        if init_weights and os.path.isfile(init_weights):
+            self._load_init_weights(init_weights)
+            # self.ema was constructed above (line ~160) from the model's
+            # random init, BEFORE these HF weights were loaded. Reseed the
+            # shadow now so it tracks the actual starting point of training
+            # instead of the random init that no longer exists in the model.
+            # Without this reseed, the shadow slowly decays away from random
+            # init toward the HF weights over ~1/(1-decay) ≈ 1000 steps,
+            # wasting the first ~0.5 epoch of eval signal.
+            self._reseed_ema_shadow("post-init-weights")
+
         # Resume
         if resume_checkpoint and os.path.isfile(resume_checkpoint):
             self._load_checkpoint(resume_checkpoint)
@@ -189,6 +230,19 @@ class OfficialTRMTrainer:
         # W&B + Weave — hostname-tagged run name, graceful auth check,
         # and Weave trace init all handled in the shared helper.
         self.use_wandb = init_wandb(config)
+
+        # Predefine metrics so the wandb dashboard auto-organizes on open:
+        # x-axis = epoch for every namespace, summary aggregations for the
+        # run-overview card and sortable runs table. Must come BEFORE the
+        # first wandb.log call (which happens in train() after _init_log).
+        self._define_wandb_metrics()
+
+        # One-shot flag for live-syncing best.pt to the wandb Files tab.
+        # wandb.save(policy="live") is a "register once, watcher handles
+        # overwrites forever" primitive — calling it on every new-best event
+        # would just churn the watcher. So we set this True after the first
+        # best.pt is saved + registered, and skip the call on subsequent bests.
+        self._best_wandb_registered = False
 
         # CSV log
         self.log_path = os.path.join(
@@ -205,18 +259,196 @@ class OfficialTRMTrainer:
                     "accuracy", "exact_accuracy", "q_halt_accuracy", "avg_steps",
                     "val_cell_acc", "val_puzzle_acc", "best_puzzle_acc", "elapsed_min",
                 ])
+        # Register the CSV for live sync to the wandb run's Files tab. The
+        # file exists on disk by this point (whether newly-created with the
+        # header row above, or preserved across a resume). One call here
+        # covers every subsequent _append_log write — wandb's watcher picks
+        # up each modification and re-uploads it.
+        self._wandb_save_live(self.log_path)
 
     def _append_log(self, row: list) -> None:
         with open(self.log_path, "a", newline="") as f:
             csv.writer(f).writerow(row)
+
+    def _define_wandb_metrics(self) -> None:
+        """Predefine metric axes and summaries so the wandb dashboard auto-organizes.
+
+        Three things get set up, all via wandb.define_metric (idempotent,
+        persists for the life of the run, no effect if wandb is disabled):
+
+        1. **x-axis = epoch**. By default wandb plots everything against its
+           internal "Step" counter. We declare an explicit `epoch` metric
+           and point every namespace (train/, val/, carbon/, system/) at it
+           via step_metric="epoch", so all charts show "Epoch" on the x-axis
+           and resumed runs line up cleanly instead of creating a Step-axis
+           discontinuity. The `hidden=True` on the epoch declaration stops
+           wandb from also plotting epoch as its own 1:1 diagonal line chart.
+
+        2. **Summary aggregations** — the single number that appears in the
+           run-overview card and the sortable runs table. wandb defaults to
+           "last value" which is wrong for most of our metrics:
+             - val/train accuracy → max (peak is the achievement)
+             - losses            → min (trough is the achievement)
+             - throughput / time → mean (per-run average is the useful number)
+             - carbon counters   → last (they're cumulative — last = total)
+             - GPU peak mem      → max (true peak across epochs = sizing info)
+             - learning rate     → last (final value after warmup; flat thereafter)
+           Setting these explicitly means you can sort your runs table by
+           `val/puzzle_acc` to find the best run without clicking in.
+
+        3. **Glob patterns** (`train/*` etc.) cover present-and-future
+           metrics under each prefix, so adding a new metric in _train_epoch
+           tomorrow doesn't require editing this function.
+
+        Must run AFTER init_wandb succeeds and BEFORE the first wandb.log
+        call — i.e. exactly where we call it from __init__.
+        """
+        if not self.use_wandb:
+            return
+
+        # The x-axis metric itself. hidden=True keeps it out of the workspace
+        # as a standalone chart (it'd just be a 1:1 line, noise).
+        wandb.define_metric("epoch", hidden=True)
+
+        # Every namespace plots against epoch. One call per prefix covers
+        # all current and future metrics under that prefix.
+        for namespace in ("train/*", "val/*", "carbon/*", "system/*"):
+            wandb.define_metric(namespace, step_metric="epoch")
+
+        # --- Summary aggregations ---
+        # Validation accuracy: max is the thesis headline number.
+        wandb.define_metric("val/puzzle_acc", summary="max")
+        wandb.define_metric("val/cell_acc", summary="max")
+
+        # Validation losses: min.
+        for m in ("val/lm_loss", "val/q_halt_loss", "val/q_continue_loss"):
+            wandb.define_metric(m, summary="min")
+
+        # Training accuracy: max (sanity-check signal that train > val).
+        for m in ("train/accuracy", "train/exact_accuracy", "train/q_halt_accuracy"):
+            wandb.define_metric(m, summary="max")
+
+        # Training losses: min.
+        for m in ("train/lm_loss", "train/q_halt_loss", "train/q_continue_loss"):
+            wandb.define_metric(m, summary="min")
+
+        # Throughput / wall-clock: mean is the useful aggregate (single epoch
+        # may be noisy — mean across the whole run is the steady-state rate).
+        wandb.define_metric("train/samples_per_sec", summary="mean")
+        wandb.define_metric("train/epoch_time_sec", summary="mean")
+
+        # Halting dynamics: frac_at_max_steps trending high means the model
+        # is hitting the ACT ceiling (failure mode signal). Max surfaces the
+        # worst epoch in the overview card so it's impossible to miss.
+        wandb.define_metric("train/frac_at_max_steps", summary="max")
+
+        # Carbon counters are monotonically increasing — last value IS the
+        # cumulative total. wandb's default is already "last", but we set it
+        # explicitly so the intent is readable in the code.
+        wandb.define_metric("carbon/emissions_kg", summary="last")
+        wandb.define_metric("carbon/energy_kwh", summary="last")
+
+        # Peak GPU memory across epochs = the true high-water mark, which is
+        # what matters for sizing batch_size on a new machine.
+        wandb.define_metric("system/gpu_mem_gb", summary="max")
+
+        # Learning rate schedule: paper-faithful flat-after-warmup (lr_lambda
+        # at line ~178 returns 1.0 forever after warmup_steps). Sorting by
+        # "last" gives the post-warmup steady-state value.
+        wandb.define_metric("train/lr", summary="last")
+
+        # Top-level thesis-favourite: best_puzzle_acc is already tracked
+        # internally via self.best_acc and printed on every log interval,
+        # but we don't currently log it to wandb as its own time-series.
+        # (The max summary on val/puzzle_acc covers this for the overview
+        # card, so no extra log call is needed.)
+
+    def _wandb_save_live(self, path: str) -> None:
+        """Register a file for live sync to the wandb run's Files tab.
+
+        wandb.save(policy="live") watches `path` and re-uploads on every
+        modification, so a single call covers all subsequent overwrites /
+        appends. We pass base_path=dirname(path) so the file lands at the
+        root of the Files tab under its basename, not nested inside the
+        absolute local path (wandb otherwise mirrors the full dir tree).
+
+        Silent on failure: an upload glitch or unusual filesystem layout
+        shouldn't crash training — the file still exists on disk as the
+        authoritative copy, and the next checkpoint will re-try.
+        """
+        if not self.use_wandb:
+            return
+        try:
+            wandb.save(path, base_path=os.path.dirname(path), policy="live")
+        except Exception as e:
+            tqdm.write(f"[wandb] live-save registration failed for {path}: {e}")
+
+    def _load_init_weights(self, path: str) -> None:
+        """Load model weights only (partial state_dict OK) for transfer learning.
+
+        Unlike _load_checkpoint, this does NOT restore the optimizer, EMA,
+        global_step, or start_epoch. Training starts from step 0 using the
+        loaded weights as initialization, with any keys not present in the
+        file left at their random init (strict=False).
+
+        Prints a summary of which keys were loaded vs which stayed random,
+        so we can verify the remap covered the reasoning core and only the
+        intentionally-excluded keys (embed_tokens, lm_head, task_emb, rotary
+        buffers) are flagged as missing.
+        """
+        print(f"Loading init weights from {path}")
+        ckpt = torch.load(path, map_location=self.device, weights_only=False)
+        state = ckpt.get("model_state_dict", ckpt)
+        if "note" in ckpt:
+            print(f"  source note: {ckpt['note']}")
+
+        result = self.model.load_state_dict(state, strict=False)
+        missing = list(result.missing_keys)
+        unexpected = list(result.unexpected_keys)
+
+        loaded_count = len(state) - len(unexpected)
+        print(f"  loaded:     {loaded_count}/{len(state)} keys from checkpoint")
+        if missing:
+            print(f"  missing   ({len(missing)}): keys in model but not in checkpoint (fresh random init):")
+            for k in missing:
+                print(f"    {k}")
+        if unexpected:
+            print(f"  unexpected ({len(unexpected)}): keys in checkpoint but not in model (silently dropped):")
+            for k in unexpected:
+                print(f"    {k}")
+        print("  optimizer/EMA/global_step unchanged — training starts from step 0")
 
     def _load_checkpoint(self, path: str) -> None:
         print(f"Resuming from {path}")
         ckpt = torch.load(path, map_location=self.device, weights_only=False)
         self.model.load_state_dict(ckpt["model_state_dict"])
         self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+
+        # Skip ema_state_dict even when it's in the checkpoint.
+        #
+        # Checkpoints written prior to the ema.py fp32-shadow fix contain a
+        # bf16 shadow that was frozen at its init values (the native-bf16
+        # forward path + EMA's per-step ~0.1% delta falls below bf16's
+        # ~0.8% mantissa precision — every update rounds to a no-op). Those
+        # shadows report the accuracy of the random-init model forever, so
+        # loading them back in would re-poison eval on the resumed run.
+        #
+        # The fp32 shadow built from the fresh model_state_dict above is
+        # the right starting point: it's the actual trained weights at the
+        # resume epoch, and training continues the EMA from there instead
+        # of inheriting the broken history.
+        #
+        # Trade-off: we lose the smoothed EMA history across the resume
+        # boundary. But since the pre-fix history is garbage, "lose the
+        # smoothing" is a feature — and after 1/(1-decay) ≈ 1000 steps
+        # (well under one epoch for this config) the new shadow has
+        # effectively the same smoothing characteristics it would have
+        # had with a continuous fp32 run.
         if "ema_state_dict" in ckpt:
-            self.ema.load_state_dict(ckpt["ema_state_dict"])
+            print("  skipping checkpoint's ema_state_dict (pre-fix broken shadow)")
+            print("  reseeding EMA shadow from loaded model weights in fp32")
+        self._reseed_ema_shadow("post-resume")
+
         self.global_step = ckpt.get("global_step", 0)
         self.start_epoch = ckpt.get("epoch", 0) + 1
         self.best_acc = ckpt.get("best_puzzle_acc", 0.0)
@@ -225,6 +457,25 @@ class OfficialTRMTrainer:
             for _ in range(self.global_step):
                 self.scheduler.step()
         print(f"Resumed at epoch {self.start_epoch}, step {self.global_step}, best_acc {self.best_acc:.4f}")
+
+    def _reseed_ema_shadow(self, reason: str) -> None:
+        """Rebuild ``self.ema.shadow`` from the model's current parameters in fp32.
+
+        Called from two places:
+        1. After ``_load_init_weights`` in ``__init__`` — the shadow built
+           at construction time tracks the pre-HF-load random init, not
+           the actual starting point of training.
+        2. From ``_load_checkpoint`` — pre-fix checkpoints contain a
+           frozen bf16 shadow that must not be trusted.
+
+        Cheap enough to do unconditionally (it's O(num_params) tensor
+        clones, all on self.device) so no need to gate it on anything.
+        """
+        self.ema.shadow = {
+            name: param.detach().clone().to(torch.float32)
+            for name, param in self.model.named_parameters()
+        }
+        print(f"[EMA] shadow reseeded from model params ({reason}, fp32)")
 
     @staticmethod
     def _fmt_time(seconds: float) -> str:
@@ -265,12 +516,18 @@ class OfficialTRMTrainer:
 
             epoch_start = time.time()
             metrics = self._train_epoch(epoch)
-            epoch_times.append(time.time() - epoch_start)
+            epoch_elapsed = time.time() - epoch_start
+            epoch_times.append(epoch_elapsed)
 
             recent = epoch_times[-10:]
             avg_sec = sum(recent) / len(recent)
             eta_sec = (self.tc.epochs - (epoch + 1)) * avg_sec
             elapsed = time.time() - t_start
+
+            # Pull side-channel values out before we iterate `metrics` for
+            # wandb logging — these need histogram/scalar special handling.
+            train_halt_tensor = metrics.pop("_halt_steps_tensor", None)
+            n_samples_seen = metrics.pop("_n_samples_seen", 0)
 
             epoch_iter.set_postfix(
                 step=self.global_step,
@@ -279,7 +536,47 @@ class OfficialTRMTrainer:
             )
 
             if self.use_wandb:
-                wandb.log({f"train/{k}": v for k, v in metrics.items()}, step=epoch + 1)
+                # NOTE: do NOT reuse the name `payload` here — that identifier
+                # is already the lazy checkpoint dict (declared None at the top
+                # of each epoch). Shadowing it would leak the wandb dict into
+                # _save_checkpoint a few lines down.
+                wandb_payload = {f"train/{k}": v for k, v in metrics.items()}
+
+                # Tier 1 system/optimizer scalars
+                wandb_payload["train/lr"] = self.optimizer.param_groups[0]["lr"]
+                wandb_payload["train/epoch_time_sec"] = epoch_elapsed
+                wandb_payload["train/samples_per_sec"] = (
+                    n_samples_seen / epoch_elapsed if epoch_elapsed > 0 else 0.0
+                )
+                if torch.cuda.is_available():
+                    wandb_payload["system/gpu_mem_gb"] = (
+                        torch.cuda.max_memory_allocated() / 1e9
+                    )
+                    # Reset the peak so each epoch measures its own high-water
+                    # mark, not the all-time max since process start.
+                    torch.cuda.reset_peak_memory_stats()
+
+                # frac_at_max_steps is a scalar and useful at log cadence —
+                # the expensive-to-render histogram moves to eval cadence
+                # below (fires once per eval_interval epochs, e.g. every 50).
+                if train_halt_tensor is not None and train_halt_tensor.numel() > 0:
+                    wandb_payload["train/frac_at_max_steps"] = float(
+                        (train_halt_tensor >= self.config.model.halt_max_steps)
+                        .float()
+                        .mean()
+                    )
+
+                # Live carbon snapshot — one curve instead of one scalar at
+                # the end. flush() is cheap and safe to call every log step.
+                carbon_snapshot = self.carbon.flush()
+                wandb_payload["carbon/emissions_kg"] = carbon_snapshot["emissions_kg"]
+                wandb_payload["carbon/energy_kwh"] = carbon_snapshot["energy_kwh"]
+
+                # Explicit epoch for the step_metric declared in
+                # _define_wandb_metrics — this is the value the dashboard
+                # charts plot against on the x-axis.
+                wandb_payload["epoch"] = epoch + 1
+                wandb.log(wandb_payload, step=epoch + 1)
 
             # Eval cadence is independent of log cadence when eval_interval > 0.
             # eval_interval == 0 preserves legacy behavior (eval fused to log).
@@ -290,13 +587,49 @@ class OfficialTRMTrainer:
                 last_val = self.evaluate()
 
                 if self.use_wandb:
-                    wandb.log({f"val/{k}": v for k, v in last_val.items()}, step=epoch + 1)
+                    val_halt_tensor = last_val.pop("_halt_steps_tensor", None)
+                    val_payload = {f"val/{k}": v for k, v in last_val.items()}
+
+                    # Histograms (both train and val) are throttled to eval
+                    # cadence — once per eval_interval epochs — so the wandb
+                    # dashboard isn't flooded with a new histogram every 5
+                    # epochs. The train tensor logged here is the *most recent
+                    # epoch's* halt distribution (not a 50-epoch rolling mix),
+                    # which matches how the scalar train/ metrics logged in
+                    # the same call behave — a snapshot, not an accumulation.
+                    if val_halt_tensor is not None and val_halt_tensor.numel() > 0:
+                        val_payload["val/halt_steps_hist"] = wandb.Histogram(
+                            val_halt_tensor.numpy()
+                        )
+                    if train_halt_tensor is not None and train_halt_tensor.numel() > 0:
+                        val_payload["train/halt_steps_hist"] = wandb.Histogram(
+                            train_halt_tensor.numpy()
+                        )
+
+                    # Same step_metric contract as the train log above.
+                    val_payload["epoch"] = epoch + 1
+                    wandb.log(val_payload, step=epoch + 1)
+                else:
+                    # Keep last_val clean for downstream best-tracking code
+                    # regardless of whether wandb is enabled.
+                    last_val.pop("_halt_steps_tensor", None)
 
                 if last_val["puzzle_acc"] > self.best_acc:
                     self.best_acc = last_val["puzzle_acc"]
                     payload = payload or self._checkpoint_payload(epoch)
                     slim = slim or {k: v for k, v in payload.items() if k != "optimizer_state_dict"}
                     self._save_checkpoint("best.pt", slim)
+                    # Live-sync best.pt to the wandb Files tab. First new-best
+                    # event registers the watcher; every subsequent best.pt
+                    # overwrite is picked up automatically. Must come AFTER
+                    # _save_checkpoint so the file exists before wandb.save
+                    # stats it. Separate from the wandb_best_artifact path
+                    # below (which creates versioned Artifacts, a different
+                    # wandb feature for a different use case).
+                    if self.use_wandb and not self._best_wandb_registered:
+                        best_path = os.path.join(self.config.checkpoint_dir, "best.pt")
+                        self._wandb_save_live(best_path)
+                        self._best_wandb_registered = True
                     if self.use_wandb and self.tc.wandb_best_artifact:
                         self._log_best_to_wandb(epoch)
                     new_best = True
@@ -379,6 +712,16 @@ class OfficialTRMTrainer:
 
         totals = {}
         n_batches = 0
+        grad_norm_sum = 0.0
+        grad_norm_count = 0
+        n_samples_seen = 0
+
+        # Per-epoch buffer of halt-step counts for every sample that halted this
+        # epoch. Built from carry.steps[carry.halted] after each ACT inner step,
+        # so every halt event (including re-halts after carry reset) contributes
+        # — same population that avg_steps averages over, making the two metrics
+        # directly comparable on the wandb dashboard.
+        halt_steps_chunks: list[torch.Tensor] = []
 
         pbar = tqdm(
             self.train_loader,
@@ -390,6 +733,7 @@ class OfficialTRMTrainer:
         )
         for batch in pbar:
             batch = {k: v.to(self.device) for k, v in batch.items()}
+            n_samples_seen += batch["inputs"].shape[0]
 
             carry = self.loss_head.initial_carry(batch)
 
@@ -402,13 +746,29 @@ class OfficialTRMTrainer:
                 )
 
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.tc.max_grad_norm)
+                # Capture pre-clip L2 norm — clip_grad_norm_ returns it as a
+                # scalar tensor. Logging the pre-clip value is the right signal
+                # for stability diagnostics: "was the gradient actually large?"
+                # not "was it clipped?".
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(), self.tc.max_grad_norm
+                )
+                grad_norm_sum += float(grad_norm)
+                grad_norm_count += 1
+
                 self.optimizer.step()
                 self.optimizer.zero_grad()
                 self.ema.update()
                 self.scheduler.step()
                 self.global_step += 1
                 steps_this_batch += 1
+
+                # Record halt events for the histogram (detached, moved to CPU
+                # so we don't pin grow-only GPU memory across the epoch).
+                if carry.halted.any():
+                    halt_steps_chunks.append(
+                        carry.steps[carry.halted].detach().to(torch.int32).cpu()
+                    )
 
                 # Accumulate metrics from halted samples
                 for k, v in metrics.items():
@@ -441,7 +801,17 @@ class OfficialTRMTrainer:
                 loss=f"{normalized['lm_loss']:.3f}",
             )
 
-        return {k: v / max(1, n_batches) for k, v in totals.items()}
+        epoch_metrics: dict = {k: v / max(1, n_batches) for k, v in totals.items()}
+        epoch_metrics["grad_norm"] = grad_norm_sum / max(1, grad_norm_count)
+        # Non-scalar side-channels returned alongside the averaged metrics.
+        # Prefixed with "_" so the `wandb.log({f"train/{k}": v ...})` loop in
+        # train() can filter them out and handle histograms/samples explicitly.
+        if halt_steps_chunks:
+            epoch_metrics["_halt_steps_tensor"] = torch.cat(halt_steps_chunks)
+        else:
+            epoch_metrics["_halt_steps_tensor"] = torch.empty(0, dtype=torch.int32)
+        epoch_metrics["_n_samples_seen"] = n_samples_seen
+        return epoch_metrics
 
     @weave_op()
     @torch.no_grad()
@@ -458,13 +828,28 @@ class OfficialTRMTrainer:
         total_q_halt_correct = 0
         n_samples = 0
 
+        # Per-sample "first step at which the Q-head would halt in deployment".
+        # The model itself disables early halting outside self.training (see
+        # trm_official.py:332), so carry.halted is useless in eval — we have
+        # to reconstruct the would-halt event manually from q_halt vs
+        # q_continue logits at each forward.
+        max_steps = self.config.model.halt_max_steps
+        halt_steps_chunks: list[torch.Tensor] = []
+        no_act_continue = self.config.model.no_ACT_continue
+
+        # Throttle eval bar to one log line per 50 iters. `mininterval=0` +
+        # explicit `miniters=50` makes iteration count the sole gate (disables
+        # tqdm's dynamic_miniters auto-tuning). Must be paired with
+        # `set_postfix(refresh=False)` below — otherwise set_postfix forces a
+        # refresh every iter and defeats this throttle.
         pbar = tqdm(
             self.val_loader,
             desc="eval ",
             bar_format=self.BAR_FORMAT,
             leave=False,
             file=_TqdmNewlineFile(sys.stderr),
-            mininterval=2.0,
+            miniters=50,
+            mininterval=0,
         )
         for batch in pbar:
             batch = {k: v.to(self.device) for k, v in batch.items()}
@@ -472,9 +857,30 @@ class OfficialTRMTrainer:
 
             carry = self.loss_head.initial_carry(batch)
 
+            # Samples that never cross the halt threshold stay pinned at
+            # max_steps — that matches how they'd actually be deployed.
+            first_halt_step = torch.full(
+                (B,), max_steps, dtype=torch.int32, device=self.device
+            )
+            ever_halted = torch.zeros(B, dtype=torch.bool, device=self.device)
+
             # Run for full halt_max_steps (no early stopping during eval)
-            for _step in range(self.config.model.halt_max_steps):
+            for step_idx in range(max_steps):
                 carry, _outputs = self.model(carry=carry, batch=batch)
+
+                q_halt = _outputs["q_halt_logits"]
+                q_cont = _outputs["q_continue_logits"]
+                would_halt = (q_halt > 0) if no_act_continue else (q_halt > q_cont)
+                newly = would_halt & ~ever_halted
+                if newly.any():
+                    first_halt_step = torch.where(
+                        newly,
+                        torch.full_like(first_halt_step, step_idx + 1),
+                        first_halt_step,
+                    )
+                    ever_halted = ever_halted | would_halt
+
+            halt_steps_chunks.append(first_halt_step.detach().cpu())
 
             # Get final predictions from last forward
             logits = _outputs["logits"]
@@ -489,25 +895,44 @@ class OfficialTRMTrainer:
             total_puzzle_correct += puzzle_correct.sum().item()
             total_puzzles += B
 
-            total_steps += carry.steps.sum().item()
+            total_steps += first_halt_step.sum().item()
             n_samples += B
 
             # Q-halt accuracy
             q_halt_correct = (_outputs["q_halt_logits"] >= 0) == puzzle_correct
             total_q_halt_correct += q_halt_correct.sum().item()
 
+            # refresh=False: update postfix state only. tqdm's 50-iter auto
+            # refresh (configured above) will pick up the latest values.
             pbar.set_postfix(
                 cell=f"{total_cell_correct / max(1, total_cells):.3f}",
                 puzzle=f"{total_puzzle_correct / max(1, total_puzzles):.3f}",
+                refresh=False,
             )
 
         self.ema.restore()
 
+        halt_tensor = (
+            torch.cat(halt_steps_chunks)
+            if halt_steps_chunks
+            else torch.empty(0, dtype=torch.int32)
+        )
+        frac_at_max = (
+            (halt_tensor >= max_steps).float().mean().item()
+            if halt_tensor.numel() > 0
+            else 0.0
+        )
+
         return {
             "cell_acc": total_cell_correct / max(1, total_cells),
             "puzzle_acc": total_puzzle_correct / max(1, total_puzzles),
+            # puzzle_acc IS exact-puzzle accuracy — exposing under the train
+            # metric name too so the train/ and val/ panels line up in wandb.
+            "exact_accuracy": total_puzzle_correct / max(1, total_puzzles),
             "avg_act_steps": total_steps / max(1, n_samples),
             "q_halt_acc": total_q_halt_correct / max(1, n_samples),
+            "frac_at_max_steps": frac_at_max,
+            "_halt_steps_tensor": halt_tensor,
         }
 
     def _safe_torch_save(self, payload: dict, path: str, tag: str) -> bool:

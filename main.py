@@ -25,6 +25,11 @@ class RunConfig(BaseModel):
     mode: str = "train"  # train | eval | distill
     checkpoint: str = ""
     resume: str = ""  # path to checkpoint to resume training from
+    # Initialize model weights from a file (partial state_dict OK), but start
+    # training from scratch — optimizer/step/epoch all reset to zero. Use this
+    # for transfer learning from a pretrained checkpoint. Mutually exclusive
+    # with --resume (which restores the full training state).
+    init_weights: str = ""
     # -1 (default) = inherit from YAML's `seed:` field (reproducible).
     # Pass an explicit non-negative int to override for one run.
     # To opt into a fresh wall-clock seed per run, set `seed: -1` in the YAML.
@@ -46,7 +51,13 @@ def main(cfg: RunConfig):
     set_seed(cfg.seed)
 
     if cfg.mode == "train":
-        _run_train(config, cfg.resume)
+        if cfg.resume and cfg.init_weights:
+            raise ValueError(
+                "--resume and --init-weights are mutually exclusive. "
+                "--resume restores full training state (optimizer, step, epoch); "
+                "--init-weights only loads model weights and starts fresh."
+            )
+        _run_train(config, cfg.resume, cfg.init_weights)
     elif cfg.mode == "eval":
         _run_eval(config, cfg.checkpoint)
     elif cfg.mode == "distill":
@@ -55,11 +66,16 @@ def main(cfg: RunConfig):
         raise ValueError(f"Unknown mode: {cfg.mode}")
 
 
-def _run_train(config: ExperimentConfig, resume: str = "") -> None:
+def _run_train(config: ExperimentConfig, resume: str = "", init_weights: str = "") -> None:
     increment = config.training.epoch_increment or config.training.epochs
 
+    first_iteration = True
     while True:
-        _run_train_once(config, resume)
+        # init_weights only applies to the first iteration. Auto-continue
+        # rounds after that resume from latest.pt (full training state), so
+        # we do NOT re-apply init_weights on each continuation.
+        _run_train_once(config, resume, init_weights if first_iteration else "")
+        first_iteration = False
 
         if not config.training.auto_continue:
             break
@@ -75,7 +91,7 @@ def _run_train(config: ExperimentConfig, resume: str = "") -> None:
         print(f"\n=== AUTO-CONTINUE: extending to {config.training.epochs} epochs ===\n")
 
 
-def _run_train_once(config: ExperimentConfig, resume: str = "") -> None:
+def _run_train_once(config: ExperimentConfig, resume: str = "", init_weights: str = "") -> None:
     model_type = config.model.model_type
 
     if model_type == ModelType.TRM_SUDOKU:
@@ -189,6 +205,7 @@ def _run_train_once(config: ExperimentConfig, resume: str = "") -> None:
         trainer = OfficialTRMTrainer(
             model, loss_head, train_loader, val_loader, config,
             resume_checkpoint=resume,
+            init_weights=init_weights,
         )
         trainer.train()
 

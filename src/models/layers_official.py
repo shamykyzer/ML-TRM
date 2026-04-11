@@ -131,11 +131,21 @@ class Attention(nn.Module):
 
 
 class SwiGLU(nn.Module):
-    """SwiGLU feed-forward matching the official TRM implementation."""
+    """SwiGLU feed-forward matching the official TRM implementation.
 
-    def __init__(self, hidden_size: int, expansion: float = 4.0):
+    `ff_hidden` overrides the default `int(hidden_size * expansion)` formula
+    when set, which is needed to match published reference checkpoints whose
+    token-mixer was sized via the Llama-style rounded formula
+    `round_up_to_multiple(int(2/3 * hidden * expansion), 256)`. The default
+    formula doesn't admit any expansion that produces both 1536 (regular FFN
+    at hidden=512) and 512 (token-mixer at hidden=97) simultaneously, so the
+    mlp_t branch in TRMBlock passes ff_hidden explicitly.
+    """
+
+    def __init__(self, hidden_size: int, expansion: float = 4.0, ff_hidden: int | None = None):
         super().__init__()
-        ff_hidden = int(hidden_size * expansion)
+        if ff_hidden is None:
+            ff_hidden = int(hidden_size * expansion)
         self.w1 = nn.Linear(hidden_size, ff_hidden, bias=False)
         self.w2 = nn.Linear(ff_hidden, hidden_size, bias=False)
         self.w3 = nn.Linear(hidden_size, ff_hidden, bias=False)
