@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from src.training.carbon_tracker import CarbonTracker
-from src.training.wandb_utils import init_wandb, weave_op
+from src.training.wandb_utils import define_common_metrics, init_wandb, weave_op
 from src.utils.config import ExperimentConfig
 
 try:
@@ -100,6 +100,8 @@ class DistillationTrainer:
 
         # W&B + Weave — graceful auth check, hostname-tagged run name
         self.use_wandb = init_wandb(config)
+        # Shared panel structure: train/ val/ carbon/ system/
+        define_common_metrics(self.use_wandb)
 
         self.log_path = os.path.join(config.experiment_dir, "distill_train_log.csv")
 
@@ -138,7 +140,7 @@ class DistillationTrainer:
                         {
                             "train/loss": metrics["loss"],
                             "val/puzzle_acc": val_metrics["puzzle_acc"],
-                            "elapsed_min": elapsed,
+                            "train/elapsed_min": elapsed,
                         },
                         step=epoch + 1,
                     )

@@ -104,3 +104,73 @@ def init_wandb(config: ExperimentConfig) -> bool:
         print("[Weave] use_weave=true but weave is not installed — skipping. (pip install weave)")
 
     return True
+
+
+def define_common_metrics(
+    use_wandb: bool,
+    namespaces: tuple[str, ...] = ("train", "val", "carbon", "system"),
+    summaries: dict[str, str] | None = None,
+) -> None:
+    """Register the shared wandb panel structure used by all TRM trainers.
+
+    Without this, metrics logged by ``trainer_trm`` / ``trainer_llm`` /
+    ``trainer_distill`` end up at the default global root in the wandb UI
+    and show up as an unsorted pile. Calling ``define_common_metrics`` right
+    after ``init_wandb`` makes the UI group them into ``train/``, ``val/``,
+    ``carbon/``, and ``system/`` panels, with sensible summary aggregations
+    (``max`` for accuracies, ``min`` for losses, etc).
+
+    Parameters
+    ----------
+    use_wandb : bool
+        Return value of ``init_wandb`` — when False, the function is a no-op
+        so callers can write ``define_common_metrics(self.use_wandb)`` without
+        any conditional.
+    namespaces : tuple[str, ...]
+        Panel prefixes to register. Every ``<namespace>/*`` metric is x-axised
+        against the (hidden) ``epoch`` step metric.
+    summaries : dict[str, str] | None
+        Optional override of the default summary aggregations. Keys are wandb
+        glob patterns (``val/*_acc``, ``*/loss``, ``carbon/*`` ...), values
+        are aggregation names (``max``, ``min``, ``mean``, ``last``). Merges
+        on top of the defaults below; pass ``None`` to accept the defaults.
+
+    Defaults
+    --------
+    ``val/*_acc`` → ``max``        (accuracies — we care about the peak)
+    ``*/loss``    → ``min``        (ce_loss / q_loss / lm_loss / loss)
+    ``carbon/*``  → ``last``       (cumulative counters)
+    ``system/*``  → ``max``        (GPU mem / util peaks)
+    ``train/lr``  → ``last``       (schedule snapshot)
+    ``*/_sec``    → ``mean``       (per-step timings)
+
+    Notes
+    -----
+    ``init_wandb`` must run first — this function assumes a wandb run is
+    already active. If ``use_wandb`` is False the function returns silently
+    without importing wandb, so it is safe on machines without the package
+    installed.
+    """
+    if not use_wandb:
+        return
+
+    # Local import so test / no-wandb environments don't pay the import cost.
+    import wandb
+
+    wandb.define_metric("epoch", hidden=True)
+    for ns in namespaces:
+        wandb.define_metric(f"{ns}/*", step_metric="epoch")
+
+    default_summaries: dict[str, str] = {
+        "val/*_acc": "max",
+        "*/loss": "min",
+        "carbon/*": "last",
+        "system/*": "max",
+        "train/lr": "last",
+        "*/_sec": "mean",
+    }
+    if summaries:
+        default_summaries.update(summaries)
+
+    for pattern, agg in default_summaries.items():
+        wandb.define_metric(pattern, summary=agg)

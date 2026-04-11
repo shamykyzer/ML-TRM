@@ -13,7 +13,7 @@ from src.models.layers import StableMaxCrossEntropy
 from src.models.recursion import deep_supervision_step
 from src.training.carbon_tracker import CarbonTracker
 from src.training.ema import EMA
-from src.training.wandb_utils import init_wandb, weave_op
+from src.training.wandb_utils import define_common_metrics, init_wandb, weave_op
 from src.utils.config import ExperimentConfig
 
 try:
@@ -102,6 +102,9 @@ class TRMTrainer:
 
         # W&B + Weave — hostname-tagged run name, auth check, graceful degradation
         self.use_wandb = init_wandb(config)
+        # Register the shared panel structure so the dashboard groups metrics
+        # by train/ val/ carbon/ system/ instead of dumping them at the root.
+        define_common_metrics(self.use_wandb)
 
         # CSV log for remote progress tracking
         self.log_path = os.path.join(config.experiment_dir, f"{config.model.model_type.value}_train_log.csv")

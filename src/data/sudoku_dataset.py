@@ -1,3 +1,28 @@
+"""PyTorch Dataset for preprocessed Sudoku-Extreme data.
+
+Token schema (authoritative — must match ``data/build_sudoku_dataset.py``
+``_seq_to_numpy`` line 118 and ``src/data/encoding.py``):
+
+    stored token | meaning       | raw CSV char
+    -------------|---------------|-------------
+         0       | pad / ignore  | —
+         1       | blank         | '.' or '0'
+       2..10     | digits 1..9   | '1'..'9'
+
+The +1 shift is applied by ``data/build_sudoku_dataset.py`` so that
+``vocab_size = 11`` leaves 0 free as the ``ignore_label_id`` sentinel.
+
+Label masking convention:
+    Pre-filled positions (where ``inputs[i] == labels[i]``) have their
+    labels replaced with 0. The CE loss is told to ignore index 0, so the
+    model is only graded on the blank cells it actually has to predict —
+    filling in the given clues would be trivial and would inflate the
+    accuracy metrics.
+
+Augmentation: ``_shuffle_sudoku`` randomly permutes digits, row-bands,
+column-bands, and transposes. Augmentations preserve solvability and are
+applied every epoch on the fly.
+"""
 import json
 import os
 

@@ -1,3 +1,27 @@
+"""PyTorch Dataset for preprocessed Maze-Hard data.
+
+Token schema (authoritative — must match ``data/build_maze_dataset.py``
+``CHARSET = '# SGo'`` and ``src/data/encoding.py``):
+
+    stored token | char | meaning
+    -------------|------|------------
+         0       |  —   | pad / ignore
+         1       |  #   | wall
+         2       | ' '  | open cell (corridor)
+         3       |  S   | start
+         4       |  G   | goal
+         5       |  o   | path marker — the solution the model must output
+
+Label masking convention:
+    Positions where ``inputs[i] == labels[i]`` (walls, open cells, S, G)
+    are replaced with 0. The CE loss ignores index 0 so the model is only
+    graded on the ``o`` cells it has to fill in — i.e. marking the
+    actual solution path from S to G.
+
+A valid maze solution has exactly one S, exactly one G, and the o-marked
+cells must form a 4-connected chain linking them
+(``src/data/encoding.is_valid_maze_path`` enforces this at eval time).
+"""
 import json
 import os
 
