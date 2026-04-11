@@ -50,7 +50,7 @@ training:
   hf_repo_id: ""                      # set via TRM_HF_REPO_ID in .env
 
   # Crash-recovery rolling backup — set via TRM_ROLLING_CHECKPOINT_DIR in .env
-  # (blank = disabled; example: D:/ml-trm-checkpoints/sudoku-official)
+  # (blank = disabled; example: D:/ml-trm-checkpoints/sudoku-att)
   rolling_checkpoint_dir: ""
   rolling_checkpoint_max: 3
   rolling_checkpoint_interval: 25
@@ -68,5 +68,5 @@ data:
 
 seed: 42
 device: cuda
-checkpoint_dir: "C:/TRM checkpoints/sudoku-official"
-experiment_dir: experiments/sudoku-official
+checkpoint_dir: "C:/TRM checkpoints/sudoku-att"
+experiment_dir: experiments/sudoku-att

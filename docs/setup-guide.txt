@@ -66,7 +66,7 @@ Config: configs/trm_official_sudoku.yaml
 
 To resume from checkpoint:
     python main.py --mode train --config configs/trm_official_sudoku.yaml \
-        --resume models/sudoku-official/latest.pt
+        --resume models/sudoku-att/latest.pt
 
 5. AUTO-PUSH TRAINING LOGS TO GITHUB
 --------------------------------------
@@ -137,9 +137,9 @@ What gets uploaded and when:
 How to use across machines:
 - Machine A (training): set TRM_HF_REPO_ID in .env and train. Uploads happen auto.
 - Machine B (resume): download checkpoints, then resume training:
-      hf download <you>/ml-trm-checkpoints --local-dir models/sudoku-official
+      hf download <you>/ml-trm-checkpoints --local-dir models/sudoku-att
       python main.py --mode train --config configs/trm_official_sudoku.yaml \
-          --resume models/sudoku-official/latest.pt
+          --resume models/sudoku-att/latest.pt
 
 How to disable:
 - Leave TRM_HF_REPO_ID blank in .env (or omit it entirely). Training works exactly
@@ -165,8 +165,8 @@ Comparison with alternatives:
 
     # Evaluate
     python main.py --mode eval --config configs/trm_official_sudoku.yaml \
-        --checkpoint models/sudoku-official/best.pt
+        --checkpoint models/sudoku-att/best.pt
 
     # Resume
     python main.py --mode train --config configs/trm_official_sudoku.yaml \
-        --resume models/sudoku-official/latest.pt
+        --resume models/sudoku-att/latest.pt

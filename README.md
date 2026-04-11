@@ -226,7 +226,7 @@ scheduler, EMA, epoch count).
 
 ```bash
 python main.py --mode train --config configs/trm_official_sudoku.yaml \
-    --resume models/sudoku-official/latest.pt
+    --resume models/sudoku-att/latest.pt
 
 python main.py --mode train --config configs/trm_official_maze.yaml \
     --resume models/maze-official/latest.pt
@@ -239,7 +239,7 @@ then resume.
 
 ```bash
 python main.py --mode eval --config configs/trm_official_sudoku.yaml \
-    --checkpoint models/sudoku-official/best.pt
+    --checkpoint models/sudoku-att/best.pt
 
 python main.py --mode eval --config configs/trm_official_maze.yaml \
     --checkpoint models/maze-official/best.pt

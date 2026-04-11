@@ -24,7 +24,7 @@ the CSV *should* have been reporting all along.
 Usage
 -----
     python scripts/diagnose_real_weights.py
-    python scripts/diagnose_real_weights.py --checkpoint "C:/TRM checkpoints/sudoku-official/snapshots_for_thesis/sudoku_milestone_10pct_epoch50.pt"
+    python scripts/diagnose_real_weights.py --checkpoint "C:/TRM checkpoints/sudoku-att/snapshots_for_thesis/sudoku_milestone_10pct_epoch50.pt"
     python scripts/diagnose_real_weights.py --device cpu
 
 The default checkpoint is the most recent milestone in the checkpoint

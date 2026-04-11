@@ -50,8 +50,8 @@ Files/dirs with a **running** training process attached. Editing them risks corr
 | `src/data/sudoku_dataset.py` | **SAFE for docstring-only edits** (Task 8). Python caches imports, so source edits cannot affect the running interpreter. Still: do not alter class signatures, function bodies, or remove code. |
 | `src/data/maze_dataset.py` | Same as above — safe for docstring-only edits. Not currently training, but keep symmetric with sudoku. |
 | `configs/trm_official_sudoku.yaml` | Active config — do not edit. `configs/trm_official_sudoku_mlp.yaml` and `trm_official_maze.yaml` may be edited if needed. |
-| `C:/TRM checkpoints/sudoku-official/*.pt` | Live checkpoints. Never rm, never overwrite. |
-| `experiments/sudoku-official/*` | Live training logs + emissions CSVs being appended. Read-only. |
+| `C:/TRM checkpoints/sudoku-att/*.pt` | Live checkpoints. Never rm, never overwrite. |
+| `experiments/sudoku-att/*` | Live training logs + emissions CSVs being appended. Read-only. |
 
 Safe to create, edit, or delete: anything under `tests/`, `scripts/`, `src/data/encoding.py` (new), `src/evaluation/inspection.py` (new), `src/training/wandb_utils.py` (append-only), the three non-official trainers (`trainer_trm.py`, `trainer_llm.py`, `trainer_distill.py`), `results/`, `plan.md`, `README.md`.
 
@@ -189,15 +189,15 @@ def inspect_failures(
 
 **File to create:** `scripts/aggregate_metrics.py`.
 
-- Walk `experiments/*/` for `*_train_log.csv` and `emissions.csv` (note: some hostname-tagged variants like `experiments/sudoku-official/trm_official_sudoku_train_log-STU-CZC5277FGD.csv` — glob `*train_log*.csv`).
+- Walk `experiments/*/` for `*_train_log.csv` and `emissions.csv` (note: some hostname-tagged variants like `experiments/sudoku-att/trm_official_sudoku_train_log-STU-CZC5277FGD.csv` — glob `*train_log*.csv`).
 - Walk `results/*_eval.json` for `cell_accuracy`, `puzzle_accuracy`, `avg_act_steps`, `inference_emissions`.
 - Output: `results/summary.csv` with columns:
   `model, task, params, best_val_puzzle_acc, final_train_loss, train_time_min, train_energy_kwh, train_co2_kg, eval_puzzle_acc, eval_cell_acc, avg_act_steps, inference_energy_kwh`
 - The `params` column comes from loading the checkpoint's config and calling `model.param_count()` — or, cheaper, hard-code a dict from the paper numbers in plan.md.
 
 **Smoke-test data available right now:**
-- `experiments/sudoku-official/trm_official_sudoku_train_log.csv` — real epochs 5, 10 logged (epoch=5: lm_loss=29.5474 acc=0.3404; epoch=10: lm_loss=20.2280 acc=0.6945).
-- `experiments/sudoku-official/emissions.csv`
+- `experiments/sudoku-att/trm_official_sudoku_train_log.csv` — real epochs 5, 10 logged (epoch=5: lm_loss=29.5474 acc=0.3404; epoch=10: lm_loss=20.2280 acc=0.6945).
+- `experiments/sudoku-att/emissions.csv`
 - `experiments/sudoku-mlp/emissions.csv`
 - `results/trm_official_sudoku_eval.json` — cell_acc 0.9155, puzzle_acc 0.8474, avg_act_steps 16.0, inference CO2 0.4787 kg.
 
@@ -368,7 +368,7 @@ This script is safe to run at any time — it does not touch `experiments/` or `
 The current code calls both splits `test_loader` — `val_loader` is just an alias. Carving a real validation slice mid-training would invalidate the active checkpoint's validation history. **Action:** document this limitation in the Methods section of the report, and cite it as a known constraint. Actually implement the split only after all training runs finish.
 
 ### Task 11 — Per-run experiment directories
-`experiments/sudoku-official/` is shared across all runs of the same config — restarts append to the same CSV. Moving to per-run dirs (`experiments/sudoku-official/run_<timestamp>/`) is a breaking change to the checkpoint-resume path and would require touching `trainer_official.py`. **Action:** defer until after all runs finish.
+`experiments/sudoku-att/` is shared across all runs of the same config — restarts append to the same CSV. Moving to per-run dirs (`experiments/sudoku-att/run_<timestamp>/`) is a breaking change to the checkpoint-resume path and would require touching `trainer_official.py`. **Action:** defer until after all runs finish.
 
 ---
 

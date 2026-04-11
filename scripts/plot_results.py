@@ -17,7 +17,7 @@ Usage
 
     # Override param counts (JSON dict of task_name -> int)
     python scripts/plot_results.py \\
-        --param-counts '{"sudoku-official": 7000000}'
+        --param-counts '{"sudoku-att": 7000000}'
 
 The heavy lifting lives in ``src/evaluation/plots.py`` (unit-tested in
 ``tests/test_plots.py``). This script is intentionally thin: CSV loading,
@@ -50,15 +50,13 @@ from src.evaluation.plots import (  # noqa: E402
 
 
 # Default parameter counts by task-name substring. The CLI walks summary rows
-# and assigns the first matching count — so e.g. "sudoku-official" resolves to
-# the TRM 7M entry via the "sudoku-official" key OR the "trm" prefix heuristic.
+# and assigns the first matching count — so e.g. "sudoku-att" resolves to
+# the TRM 7M entry via the "sudoku-att" key OR the "trm" prefix heuristic.
 #
 # Override via --param-counts '{...}' on the command line if the auto-match is
 # wrong for your experiment naming.
 DEFAULT_PARAM_COUNTS: dict[str, int] = {
     # TRM family — all share the same architecture, ~7M params
-    "sudoku-official": 7_000_000,
-    "sudoku": 7_000_000,
     "sudoku-mlp": 7_000_000,
     "sudoku-att": 7_000_000,
     "maze": 7_000_000,
@@ -155,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
         "--param-counts",
         default=None,
         help="JSON dict overriding DEFAULT_PARAM_COUNTS, e.g. "
-             '\'{"sudoku-official": 7000000, "gpt2": 124000000}\'',
+             '\'{"sudoku-att": 7000000, "gpt2": 124000000}\'',
     )
     args = parser.parse_args(argv)
 
