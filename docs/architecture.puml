@@ -1,0 +1,257 @@
+' =============================================================================
+' ML-TRM Architecture Diagram (PlantUML)
+' Project: Tiny Recursive Models vs. LLMs for Puzzle Solving
+' Authors: Armin Ghaseminejad, Nickolas Greiner, Ahmed AlShamy
+' =============================================================================
+' Render with:
+'   plantuml docs/architecture.puml           (both diagrams)
+'   plantuml -tsvg docs/architecture.puml     (SVG output for thesis)
+' =============================================================================
+
+@startuml ml_trm_components
+
+title ML-TRM — Component Architecture\n(Sudoku-Extreme + Maze-Hard benchmark)
+
+skinparam componentStyle rectangle
+skinparam packageStyle rectangle
+skinparam shadowing false
+
+' ============ Entry points ============
+package "Entry Points" as EntryPkg #FFF7DB {
+  [main.py] as Main
+  [start.py] as Start
+  note right of Main
+    --config <yaml>
+    --mode train|eval|distill
+    --resume / --init-weights
+    Dispatches on ModelType enum
+  end note
+}
+
+' ============ Config ============
+package "Config" as ConfigPkg #E8F5FD {
+  [src/utils/config.py\n<<ExperimentConfig>>] as Config
+  folder "configs/*.yaml" as Yamls {
+    [trm_official_sudoku.yaml\nsudoku-att  (mlp_t=false)] as YAtt
+    [trm_official_sudoku_mlp.yaml\nsudoku-mlp  (mlp_t=true)] as YMlp
+    [trm_official_maze.yaml\nmaze (att)] as YMaze
+    [trm_sudoku.yaml / trm_maze.yaml\ncustom simple TRM] as YCustom
+    [llm_gpt2 / llm_qwen /\nllm_smollm / llm_llama] as YLLM
+  }
+}
+
+' ============ Data ============
+package "Data" as DataPkg #F3E8FD {
+  [src/data/sudoku_dataset.py\nSudokuDataset + _shuffle_sudoku] as SudDS
+  [src/data/maze_dataset.py\nMazeDataset] as MazDS
+  [src/data/encoding.py\nencode/decode,\nis_valid_maze_path] as Enc
+  [src/data/collate.py\nofficial_collate_fn] as Collate
+  database "data/\n  sudoku-extreme-full/\n    (1k train · 423k test)\n  maze-30x30-hard-1k/\n    (1k train · 1k test)" as Npy
+}
+
+' ============ Models ============
+package "Models" as ModelPkg #E4F7E4 {
+  package "Official TRM (Sanjin2024)" as Off {
+    [src/models/trm_official.py\n<<TRMOfficial>>  ACT wrapper\n<<TRMInner>>     core] as TRMOff
+    [src/models/layers_official.py\nCastedEmbed/Linear,\nRotary, SwiGLU, Attention] as LayersOff
+    [src/models/losses_official.py\n<<ACTLossHead>>\nCE + Q-learning] as LossOff
+    note bottom of TRMOff
+      mlp_t=false → sudoku-att / maze
+      mlp_t=true  → sudoku-mlp
+      H_cycles × L_cycles recursion
+      Carry-based ACT halting
+      bfloat16 native
+    end note
+  }
+  package "Custom simple TRM" as Custom {
+    [src/models/trm_sudoku.py\nTRMSudoku  (MLP-Mixer)\nTRMMaze    (Attn + RoPE)] as TRMCustom
+    [src/models/trm_block.py\nTRMBlock] as TRMBlk
+    note bottom of TRMCustom
+      2-layer shared block,
+      fixed N_sup recursion,
+      fp16 AMP, no task_emb,
+      no ACT head
+    end note
+  }
+  package "LLM baselines" as LLMs {
+    [src/models/baseline_llm.py\nHuggingFace + LoRA/QLoRA] as LLMBase
+    [src/models/distilled_llm.py\nstudent model] as LLMDist
+  }
+}
+
+' ============ Training ============
+package "Training" as TrainPkg #FEEDEC {
+  [src/training/trainer_official.py\n<<OfficialTRMTrainer>>\ncarry-ACT, AdamATan2] as TrainOff
+  [src/training/trainer_trm.py\n<<TRMTrainer>>\nfixed N_sup, GradScaler] as TrainTRM
+  [src/training/trainer_llm.py\n<<LLMTrainer>>] as TrainLLM
+  [src/training/trainer_distill.py\n<<DistillTrainer>>] as TrainDist
+  [src/training/wandb_utils.py\ninit_wandb,\ndefine_common_metrics] as WBUtils
+  [src/training/carbon_tracker.py\nCodeCarbon] as Carbon
+  [src/training/ema.py] as EMA
+}
+
+' ============ Evaluation ============
+package "Evaluation" as EvalPkg #FDF3E8 {
+  [src/evaluation/evaluate.py\ncell_acc, puzzle_acc,\navg_steps] as EvalCore
+  [src/evaluation/aggregate.py\nparse_train_log,\nparse_emissions] as Agg
+  [src/evaluation/plots.py\n5 thesis figures (Agg)] as Plots
+  [src/evaluation/inspection.py\nrender_sudoku_board,\nrender_maze] as Inspect
+}
+
+' ============ Scripts ============
+package "Scripts" as ScriptsPkg #FFE8F0 {
+  [scripts/sanity_check.py\nCPU preflight] as Sanity
+  [scripts/aggregate_metrics.py] as AggCLI
+  [scripts/plot_results.py] as PlotCLI
+}
+
+' ============ Outputs ============
+package "Outputs" #ECECEC {
+  database "experiments/\n  sudoku-mlp/\n  sudoku-att/\n  maze/\n    *_train_log.csv\n    emissions.csv\n    checkpoints/*.pt" as Experiments
+  database "results/\n  summary.csv\n  figures/\n    accuracy_vs_epoch.png\n    model_accuracy_bars.png\n    carbon_footprint_bars.png\n    params_vs_accuracy.png\n    act_convergence.png" as Results
+}
+
+' ============ External ============
+package "External" #F5F5F5 {
+  cloud "Weights & Biases\n+ Weave" as WB
+  cloud "CodeCarbon" as CC
+  cloud "HuggingFace Hub" as HF
+}
+
+' ============ Wiring ============
+Main --> Config : load_config()
+Main ..> Yamls
+Config ..> TRMOff
+Config ..> TRMCustom
+Config ..> LLMBase
+Config ..> LLMDist
+
+Main --> TrainOff  : ModelType.TRM_OFFICIAL_*
+Main --> TrainTRM  : ModelType.TRM_*
+Main --> TrainLLM  : ModelType.LLM_FINETUNE
+Main --> TrainDist : ModelType.LLM_DISTILL
+
+' Data dependencies
+SudDS --> Npy
+MazDS --> Npy
+TrainOff --> SudDS
+TrainOff --> MazDS
+TrainOff --> Collate
+TrainTRM --> SudDS
+TrainTRM --> MazDS
+
+' Model dependencies
+TRMOff    --> LayersOff
+TRMOff    --> LossOff
+TRMCustom --> TRMBlk
+LLMBase   --> HF
+LLMDist   --> HF
+
+' Trainer → outputs + external
+TrainOff  --> Experiments
+TrainTRM  --> Experiments
+TrainLLM  --> Experiments
+TrainDist --> Experiments
+
+TrainOff --> Carbon
+TrainOff --> EMA
+TrainOff --> WBUtils
+TrainTRM --> Carbon
+TrainTRM --> EMA
+TrainTRM --> WBUtils
+
+Carbon  --> CC
+WBUtils --> WB
+
+' Post-training pipeline
+AggCLI --> Agg
+Agg    --> Experiments : reads *_train_log.csv\n+ emissions.csv
+Agg    --> Results     : writes summary.csv
+PlotCLI --> Plots
+Plots   --> Experiments : reads train_logs
+Plots   --> Results     : reads summary.csv,\nwrites figures/*.png
+
+' Preflight safety rail
+Sanity --> SudDS
+Sanity --> MazDS
+Sanity --> TRMCustom
+Sanity --> Inspect
+
+@enduml
+
+
+@startuml ml_trm_flow
+
+title ML-TRM — End-to-End Training + Eval Flow
+
+actor Researcher as User
+participant "main.py" as Main
+participant "src/utils/config.py" as Cfg
+participant "SudokuDataset /\nMazeDataset" as DS
+participant "TRMOfficial\n(TRMInner + ACT)" as Model
+participant "OfficialTRMTrainer" as Trainer
+participant "CarbonTracker" as Carbon
+participant "W&B + Weave" as WB
+database "experiments/\nsudoku-mlp | sudoku-att\n| maze/" as Exp
+participant "scripts/\naggregate_metrics.py" as AggCLI
+participant "scripts/\nplot_results.py" as PlotCLI
+database "results/\nsummary.csv\n+ figures/" as Res
+
+== 0. (Optional) Preflight ==
+User -> Main : python scripts/sanity_check.py
+note right: Tiny CPU-only forward pass\nover sudoku + maze batches\nbefore multi-day GPU runs.
+
+== 1. Configuration ==
+User -> Main : python main.py \\\n  --config configs/trm_official_sudoku.yaml \\\n  --mode train
+Main -> Cfg : load_config(path)
+Cfg --> Main : ExperimentConfig\n(model_type=trm_official_sudoku,\n mlp_t=false → sudoku-att)
+
+== 2. Instantiation ==
+Main -> DS : SudokuDataset("train")\n+ SudokuDataset("test")
+DS --> Main : train_loader, val_loader
+Main -> Model : TRMOfficial(model_cfg)
+Model --> Main : inner + ACT wrapper
+Main -> Trainer : OfficialTRMTrainer(\n  model, loaders, config)
+Trainer -> WB : init_wandb() +\ndefine_common_metrics()
+Trainer -> Carbon : start()
+
+== 3. Training loop ==
+loop for epoch in range(epochs)
+  loop for batch in train_loader
+    Trainer -> Model : forward(carry, {inputs, labels, task_id})
+    Model -> Model : embed_tokens + task_emb prefix
+    Model -> Model : H_cycles × L_cycles recursion\n(H-1 no-grad, last H with grad)
+    Model -> Model : lm_head + q_head
+    Model --> Trainer : logits, q_halt, q_continue
+    Trainer -> Trainer : ACTLossHead:\n  CE + Q-learning
+    Trainer -> Trainer : optimizer.backward()\nAdamATan2 step
+    alt not halted
+      Model -> Model : extend carry for next step
+    end
+  end
+  alt (epoch+1) % eval_interval == 0
+    Trainer -> Model : evaluate()
+    Model --> Trainer : cell_acc, puzzle_acc,\navg_steps
+    Trainer -> Exp : append *_train_log.csv row
+    Trainer -> WB : wandb.log({\n  train/loss, val/puzzle_acc,\n  carbon/co2_kg, system/...})
+  end
+  alt new best or rolling checkpoint
+    Trainer -> Exp : save latest.pt / best.pt\n+ milestone snapshots
+  end
+end
+
+Trainer -> Carbon : stop()
+Carbon -> Exp : emissions.csv
+
+== 4. Aggregate metrics ==
+User -> AggCLI : python scripts/aggregate_metrics.py
+AggCLI -> Exp : scan &\nparse_train_log +\nparse_emissions\n(max-per-metric,\nout-of-order-epoch safe)
+AggCLI -> Res : write summary.csv\n(one row per task)
+
+== 5. Plot thesis figures ==
+User -> PlotCLI : python scripts/plot_results.py
+PlotCLI -> Exp : read *_train_log.csv\n(per-epoch curves)
+PlotCLI -> Res : read summary.csv\n(per-model rollups)
+PlotCLI -> Res : write figures/:\n  accuracy_vs_epoch.png\n  model_accuracy_bars.png\n  carbon_footprint_bars.png\n  params_vs_accuracy.png\n  act_convergence.png
+
+@enduml
