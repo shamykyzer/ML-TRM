@@ -7,6 +7,10 @@ experiments/**/*.csv
 experiments/**/*.json
 results/**/*.json
 .env
+# wandb_api.txt is a one-shot bootstrap: drop your wandb API key in here
+# and start.py / init_wandb auto-load it. NEVER commit. After bootstrap
+# the value lives in .env + ~/_netrc; delete wandb_api.txt once verified.
+wandb_api.txt
 wandb/
 hf_checkpoints/
 

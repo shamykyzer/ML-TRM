@@ -18,6 +18,36 @@ import time
 
 from src.utils.config import ExperimentConfig
 
+# Repo root resolved from this file's path: src/training/wandb_utils.py → repo
+# Used to find wandb_api.txt regardless of process cwd (matters for tests
+# and for direct trainer imports outside the start.py / main.py launchers).
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_WANDB_API_FILE = os.path.join(_REPO_ROOT, "wandb_api.txt")
+
+
+def _load_api_key_from_file() -> str:
+    """Read wandb_api.txt at the repo root, return the stripped token or ''.
+
+    Convenience for users who don't want to deal with `wandb login` or
+    edit `.env`: drop the key in `wandb_api.txt` and any trainer process
+    will pick it up via this helper. Idempotent and safe to call when the
+    file is missing — returns empty string.
+
+    Token validation is deliberately minimal (length sanity check). The
+    real verification happens when wandb.init() actually contacts the API.
+    """
+    if not os.path.exists(_WANDB_API_FILE):
+        return ""
+    try:
+        with open(_WANDB_API_FILE, encoding="utf-8") as f:
+            token = f.read().strip()
+    except OSError:
+        return ""
+    # Wandb API keys are >= 40 chars (legacy hex) or longer (new prefixed
+    # format). Anything shorter is almost certainly a typo or a placeholder
+    # — better to silently ignore than to send junk to api.wandb.ai.
+    return token if len(token) >= 40 else ""
+
 try:
     import wandb
     WANDB_AVAILABLE = True
@@ -55,6 +85,17 @@ def init_wandb(config: ExperimentConfig) -> bool:
         print("[W&B] Fix: pip install wandb")
         return False
 
+    # Auth-key bootstrap from wandb_api.txt — runs BEFORE the env+netrc
+    # check so a freshly-dropped token activates wandb on the very next
+    # run with no other config touched. We only set the env var when it
+    # is unset; an existing WANDB_API_KEY (e.g. from .env via load_dotenv)
+    # takes precedence so users can override per-run from the shell.
+    if not os.getenv("WANDB_API_KEY"):
+        token = _load_api_key_from_file()
+        if token:
+            os.environ["WANDB_API_KEY"] = token
+            print(f"[W&B] Loaded API key from {_WANDB_API_FILE}")
+
     # Auth check: WANDB_API_KEY env var OR a netrc file with wandb creds.
     # On Windows, the wandb CLI writes ~/_netrc (underscore) rather than
     # ~/.netrc, so we check both filenames regardless of platform.
@@ -74,7 +115,8 @@ def init_wandb(config: ExperimentConfig) -> bool:
 
     if not (os.getenv("WANDB_API_KEY") or has_netrc_auth):
         print("[W&B] use_wandb=true but no WANDB_API_KEY set and no netrc auth — disabling wandb.")
-        print("[W&B] Fix: run `wandb login` (writes ~/.netrc or ~/_netrc) or set WANDB_API_KEY in .env")
+        print("[W&B] Fix: paste your key into wandb_api.txt at the repo root,")
+        print("[W&B]      OR run `wandb login`, OR set WANDB_API_KEY in .env")
         return False
 
     hostname = socket.gethostname()

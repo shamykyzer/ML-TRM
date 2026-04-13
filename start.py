@@ -22,6 +22,17 @@ from typing import Callable, List, Tuple
 ROOT = os.path.dirname(os.path.abspath(__file__))
 os.chdir(ROOT)
 
+# Force UTF-8 on stdout/stderr so the unicode glyphs we print (✓, ▕, ▏, etc)
+# don't crash with UnicodeEncodeError on the default Windows cp1252 console.
+# Python 3.7+ supports `reconfigure()`; older streams (StringIO in tests,
+# certain subprocess setups) are silently skipped via the try/except.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+        except Exception:
+            pass
+
 # --- Venv path detection ---
 # Windows uses a shorter path to avoid MAX_PATH issues during pip install.
 if platform.system() == "Windows":
@@ -237,16 +248,112 @@ def _bootstrap_env() -> None:
     print(f"\n{DIM}Then re-run:{RESET} python start.py")
 
 
+def _bootstrap_wandb_from_file() -> bool:
+    """If wandb_api.txt has a token, plumb it into .env and ~/_netrc.
+
+    This is the auto-setup the user gets when they drop their key into
+    wandb_api.txt at the repo root and re-run `python start.py`. Running
+    after the file is created upgrades the wandb stage from "instructions"
+    to "actually configured" without requiring manual `wandb login` calls.
+
+    Idempotent and safe to call on every start.py invocation:
+      • Reads wandb_api.txt; bails with False if missing/empty/too-short.
+      • Updates the WANDB_API_KEY line in .env in-place if present, else
+        appends; .env is created if absent (using .env.example as the
+        template) so `load_dotenv()` in main.py picks it up.
+      • Rewrites the api.wandb.ai stanza in ~/_netrc, preserving any
+        other machine entries (github creds, etc).
+      • Returns True on success, False if no token was available.
+    """
+    token = _read_wandb_api_file()
+    if not token:
+        return False
+
+    # --- .env: create from .env.example if absent, then upsert the key ---
+    env_path = os.path.join(ROOT, ".env")
+    if not os.path.exists(env_path):
+        example = os.path.join(ROOT, ".env.example")
+        if os.path.exists(example):
+            shutil.copy(example, env_path)
+            print(f"{DIM}[wandb-bootstrap] created .env from .env.example{RESET}")
+        else:
+            open(env_path, "w").close()
+
+    with open(env_path, encoding="utf-8") as f:
+        lines = f.readlines()
+    found = False
+    for i, line in enumerate(lines):
+        if line.startswith("WANDB_API_KEY="):
+            lines[i] = f"WANDB_API_KEY={token}\n"
+            found = True
+            break
+    if not found:
+        if lines and not lines[-1].endswith("\n"):
+            lines[-1] += "\n"
+        lines.append(f"WANDB_API_KEY={token}\n")
+    with open(env_path, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+    print(f"{DIM}[wandb-bootstrap] wrote WANDB_API_KEY to .env{RESET}")
+
+    # --- ~/_netrc: rewrite only the api.wandb.ai stanza, preserve others ---
+    netrc_path = os.path.join(os.path.expanduser("~"), "_netrc")
+    stanza = f"machine api.wandb.ai\n  login user\n  password {token}\n"
+    existing = ""
+    if os.path.exists(netrc_path):
+        try:
+            with open(netrc_path, encoding="utf-8") as f:
+                existing = f.read()
+            # Strip any prior api.wandb.ai block (up to next `machine` or EOF).
+            import re
+            existing = re.sub(
+                r"machine\s+api\.wandb\.ai.*?(?=\nmachine\s|\Z)",
+                "",
+                existing,
+                flags=re.DOTALL,
+            ).rstrip()
+            if existing:
+                existing += "\n\n"
+        except OSError:
+            existing = ""
+    with open(netrc_path, "w", encoding="utf-8") as f:
+        f.write(existing + stanza)
+    try:
+        os.chmod(netrc_path, 0o600)  # best-effort on git-bash/Windows
+    except OSError:
+        pass
+    print(f"{DIM}[wandb-bootstrap] wrote api.wandb.ai stanza to {netrc_path}{RESET}")
+
+    print(f"\n{GREEN}✓ wandb auto-bootstrapped from wandb_api.txt{RESET}")
+    print(f"{DIM}  (you can delete wandb_api.txt now — the key is persisted in .env + _netrc){RESET}\n")
+    return True
+
+
 def _wandb_instructions() -> None:
-    """Print wandb login instructions and exit (user takes action manually).
+    """Auto-bootstrap from wandb_api.txt when present, else print manual steps.
+
+    Stage action for the `wandb` stage. Called only when _wandb_ready()
+    returns False (no env var, no netrc, no wandb_api.txt) — but also
+    re-invokable manually if the user wants to refresh the netrc entry
+    after dropping a new token into wandb_api.txt.
 
     If the user's current shell has the venv activated, `wandb` will be on
     PATH and we show the short form. Otherwise we hand them the full path
     to the venv's wandb.exe — that works from any shell without activation,
     which is the common stumble point on Windows/PowerShell.
     """
+    # Auto-bootstrap path: a token in wandb_api.txt means we can configure
+    # wandb without any user interaction. This handles the common workflow
+    # of "drop the key in a file, re-run start.py, training picks it up".
+    if _bootstrap_wandb_from_file():
+        print(f"{DIM}[wandb-bootstrap] consider deleting wandb_api.txt now —{RESET}")
+        print(f"{DIM}   it sits inside the OneDrive-synced repo and will upload to{RESET}")
+        print(f"{DIM}   the cloud. The key now lives in .env and ~/_netrc.{RESET}")
+        return
+
     print(f"\n{YELLOW}⚠  wandb not authed.{RESET} Your configs have use_wandb=true.")
     print(f"{DIM}   (Training will still work — wandb tracking just gets disabled.){RESET}")
+    print(f"\n{BOLD}→ Easiest:{RESET} paste your key into {CYAN}wandb_api.txt{RESET} at the repo root,")
+    print(f"           then re-run {CYAN}python start.py{RESET} — auto-configures.")
 
     on_path = shutil.which("wandb") is not None
     venv_wandb_exists = os.path.exists(WANDB)
@@ -368,12 +475,36 @@ def _env_ready() -> bool:
     return os.path.exists(os.path.join(ROOT, ".env"))
 
 
-def _wandb_ready() -> bool:
-    """WANDB_API_KEY env var set, OR a netrc file has wandb credentials.
+_WANDB_API_FILE = os.path.join(ROOT, "wandb_api.txt")
 
-    Checks both `~/.netrc` (POSIX convention) and `~/_netrc` (Windows
-    convention — what the wandb CLI actually writes on Windows). Either
-    one counts as ready.
+
+def _read_wandb_api_file() -> str:
+    """Return the stripped token in wandb_api.txt, or '' if missing/short.
+
+    Mirrors the same helper in src/training/wandb_utils.py — kept duplicated
+    rather than imported because start.py runs on system Python (no third-
+    party deps), and `from src.training...` would pull in torch/wandb.
+    """
+    if not os.path.exists(_WANDB_API_FILE):
+        return ""
+    try:
+        with open(_WANDB_API_FILE, encoding="utf-8") as f:
+            tok = f.read().strip()
+    except OSError:
+        return ""
+    return tok if len(tok) >= 40 else ""
+
+
+def _wandb_ready() -> bool:
+    """WANDB_API_KEY env var set, OR netrc has wandb creds, OR wandb_api.txt
+    holds a plausible token.
+
+    Checks `~/.netrc` (POSIX) and `~/_netrc` (Windows — what the wandb CLI
+    writes on Windows). The wandb_api.txt path is the auto-bootstrap source
+    consumed by `_bootstrap_wandb_from_file()` (and by init_wandb at
+    trainer-import time): if that file is present and non-empty, the wandb
+    stage's setup action is a no-op because the trainer will load it
+    automatically on the next run.
     """
     if os.getenv("WANDB_API_KEY"):
         return True
@@ -388,6 +519,8 @@ def _wandb_ready() -> bool:
                     return True
         except OSError:
             continue
+    if _read_wandb_api_file():
+        return True
     return False
 
 
@@ -601,19 +734,231 @@ def _dispatch_training(task: str, seed: int, dry_run: bool = False) -> None:
     sys.exit(result.returncode)
 
 
+# ============================================================
+# Resume / extend training
+# ============================================================
+
+# Map a checkpoint dir (or its task-prefix) to the YAML config that produced
+# it. The fleet dirs use `<task>-seed<N>` naming where <task> is one of the
+# TASK_DISPATCH keys; legacy / non-fleet runs (older `models/sudoku/`,
+# `models/maze/`) use the simple-TRM configs. New entries can be added here
+# without touching anything else.
+RESUME_CONFIG_BY_PREFIX: dict = {
+    "sudoku-mlp":      "configs/trm_official_sudoku_mlp.yaml",
+    "sudoku-att":      "configs/trm_official_sudoku.yaml",
+    "sudoku-official": "configs/trm_official_sudoku.yaml",  # legacy alias
+    "maze":            "configs/trm_official_maze.yaml",
+    "llm-sudoku":      "configs/llm_qwen.yaml",
+    # Legacy simple-TRM dirs (trainer_trm.py, not trainer_official.py):
+    "sudoku":          "configs/trm_sudoku.yaml",
+}
+
+
+def _scan_for_checkpoints(root: str) -> List[Tuple[str, int, str]]:
+    """Walk one root for subdirs containing epoch_<N>.pt files.
+
+    Returns a list of (dir_path, max_epoch_int, latest_pt_path) tuples,
+    one per discovered run dir, sorted by mtime descending so the most
+    recent run shows first in the picker. Skips any dir with no
+    epoch_*.pt files. We deliberately accept BOTH a `latest.pt` (only
+    written by trainer_trm at end-of-run) and the highest `epoch_N.pt`
+    (the granular crash-recovery point) — the picker prefers epoch_N.pt
+    because it's available mid-run after Ctrl+C, which `latest.pt` is not.
+    """
+    import re
+    if not os.path.isdir(root):
+        return []
+    results: List[Tuple[str, int, str]] = []
+    epoch_re = re.compile(r"epoch_(\d+)\.pt$")
+    for entry in sorted(os.listdir(root)):
+        run_dir = os.path.join(root, entry)
+        if not os.path.isdir(run_dir):
+            continue
+        max_ep = -1
+        max_path = ""
+        try:
+            files = os.listdir(run_dir)
+        except OSError:
+            continue
+        for fname in files:
+            m = epoch_re.match(fname)
+            if not m:
+                continue
+            ep = int(m.group(1))
+            if ep > max_ep:
+                max_ep = ep
+                max_path = os.path.join(run_dir, fname)
+        if max_ep >= 0:
+            results.append((run_dir, max_ep, max_path))
+    # Sort newest-mtime first (the run the user just Ctrl+C'd should be
+    # at the top so they don't have to scroll).
+    results.sort(key=lambda r: os.path.getmtime(r[2]), reverse=True)
+    return results
+
+
+def _config_for_run_dir(run_dir: str) -> str:
+    """Best-effort: derive the YAML config from the run dir's basename.
+
+    Strips a trailing `-seed<N>` suffix and looks the prefix up in
+    RESUME_CONFIG_BY_PREFIX. Returns "" when the prefix is unknown — the
+    caller prompts for a manual config path in that case.
+    """
+    import re
+    base = os.path.basename(run_dir.rstrip(os.sep).rstrip("/"))
+    base = re.sub(r"-seed\d+$", "", base)
+    return RESUME_CONFIG_BY_PREFIX.get(base, "")
+
+
+def _seed_for_run_dir(run_dir: str) -> int:
+    """Parse the seed N out of a `<task>-seed<N>` directory name.
+
+    Returns 0 when the dir doesn't follow the convention (legacy runs
+    written before the seed-variance launcher existed).
+    """
+    import re
+    m = re.search(r"-seed(\d+)$", os.path.basename(run_dir.rstrip(os.sep).rstrip("/")))
+    return int(m.group(1)) if m else 0
+
+
+def _resume_training_picker() -> None:
+    """Interactive: pick a finished/interrupted run and extend it by N epochs.
+
+    Discovery scans both:
+      • $TRM_WORK_DIR (fleet runs from `start.py` dispatch / run_seed.sh)
+      • <repo>/models/  (legacy simple-TRM runs that wrote inside the repo)
+    Each candidate run is shown with its highest epoch_<N>.pt checkpoint —
+    NOT `latest.pt`, because latest.pt is only written when a run completes
+    cleanly, but Ctrl+C recovery has to start from the most recent
+    epoch_N.pt that the save_interval cadence wrote to disk.
+
+    The user picks a run, the picker resolves the right config via the dir
+    name, asks how many ADDITIONAL epochs to run, then dispatches main.py
+    with --resume <ckpt> --epochs <max_ep + extra>. main.py's _run_train
+    treats --epochs as the new total target — the trainer loop runs from
+    the resumed start_epoch through to the new total.
+    """
+    work_dir = os.environ.get("TRM_WORK_DIR") or _default_work_dir()
+    candidates = (
+        _scan_for_checkpoints(work_dir)
+        + _scan_for_checkpoints(os.path.join(ROOT, "models"))
+    )
+
+    if not candidates:
+        print(f"\n{YELLOW}!!! No resumable runs found.{RESET}")
+        print(f"{DIM}    Looked in:{RESET}")
+        print(f"{DIM}      • {work_dir}{RESET}")
+        print(f"{DIM}      • {os.path.join(ROOT, 'models')}{RESET}")
+        print(f"{DIM}    A run is resumable when its directory contains at least one{RESET}")
+        print(f"{DIM}    epoch_<N>.pt file (written every save_interval epochs).{RESET}\n")
+        return
+
+    print(f"\n{BOLD}Resumable runs:{RESET}  {DIM}(newest first){RESET}")
+    for i, (run_dir, max_ep, ckpt_path) in enumerate(candidates, 1):
+        cfg = _config_for_run_dir(run_dir) or f"{YELLOW}<unknown — will prompt>{RESET}"
+        seed = _seed_for_run_dir(run_dir)
+        size_mb = os.path.getsize(ckpt_path) / 1e6
+        print(
+            f"  {CYAN}{i:>2}{RESET}) {os.path.basename(run_dir):<28s}"
+            f"  epoch={CYAN}{max_ep:>4}{RESET}"
+            f"  seed={seed}"
+            f"  ({size_mb:.0f} MB)"
+        )
+        print(f"      {DIM}{ckpt_path}{RESET}")
+        print(f"      {DIM}config: {cfg}{RESET}")
+
+    raw = _prompt(f"\nPick run 1-{len(candidates)}", default="1")
+    try:
+        idx = int(raw) - 1
+        run_dir, max_ep, ckpt_path = candidates[idx]
+    except (ValueError, IndexError):
+        print(f"{YELLOW}!!! Invalid choice '{raw}'.{RESET}")
+        return
+
+    config = _config_for_run_dir(run_dir)
+    if not config:
+        config = _prompt(
+            f"Config YAML for this run (relative to repo root)",
+            default="configs/trm_sudoku.yaml",
+        )
+        if not os.path.exists(os.path.join(ROOT, config)):
+            print(f"{YELLOW}!!! Config not found: {config}{RESET}")
+            return
+
+    # The "how many MORE epochs?" framing is the natural one for the user
+    # ("I just hit 500, give me 200 more"); we convert to the absolute
+    # total that main.py / the trainer loop expect via --epochs.
+    extra_str = _prompt(
+        f"Run for how many MORE epochs? (current = {max_ep})",
+        default="100",
+    )
+    try:
+        extra = int(extra_str)
+        if extra <= 0:
+            raise ValueError
+    except ValueError:
+        print(f"{YELLOW}!!! Need a positive integer, got '{extra_str}'.{RESET}")
+        return
+    new_total = max_ep + extra
+    seed = _seed_for_run_dir(run_dir)
+
+    # Pin checkpoint/experiment dirs back to the SAME run dir so the new
+    # epoch_<N>.pt files, train_log.csv, and emissions.csv append to the
+    # existing artifacts instead of starting a fresh dir somewhere else.
+    env = os.environ.copy()
+    env["TRM_CHECKPOINT_DIR"] = run_dir
+    env["TRM_EXPERIMENT_DIR"] = run_dir
+
+    args = [
+        PYTHON, "main.py",
+        "--mode", "train",
+        "--config", config,
+        "--resume", ckpt_path,
+        "--epochs", str(new_total),
+        "--seed", str(seed),
+    ]
+
+    bar = "=" * 64
+    print(f"\n{BOLD}{bar}{RESET}")
+    print(f"  resume from        : {CYAN}epoch_{max_ep}.pt{RESET}  {DIM}({ckpt_path}){RESET}")
+    print(f"  config             : {config}")
+    print(f"  current epoch      : {max_ep}")
+    print(f"  extra epochs       : {CYAN}{extra}{RESET}")
+    print(f"  new total epochs   : {CYAN}{new_total}{RESET}")
+    print(f"  seed               : {seed}")
+    print(f"  TRM_CHECKPOINT_DIR : {run_dir}")
+    print(f"  wandb              : "
+          f"{GREEN}✓ ready{RESET}" if _wandb_ready() else f"{YELLOW}not configured (will train without){RESET}")
+    print(f"{BOLD}{bar}{RESET}\n")
+
+    confirm = _prompt(f"Launch? [y/N]", default="N").lower()
+    if confirm not in ("y", "yes"):
+        print(f"{DIM}Aborted — nothing launched.{RESET}\n")
+        return
+
+    result = subprocess.run(args, env=env, cwd=ROOT)
+    sys.exit(result.returncode)
+
+
+# ============================================================
+# Interactive launcher
+# ============================================================
+
 def _interactive_launcher() -> None:
     """Prompt the user to pick an action after all setup stages are ready.
 
     Main entry for the 6-box workflow: re-run `python start.py` per seed,
     pick a task + seed from the menu, train. Option 3 is the Regime A
     one-shot (no training); option 4 dumps the full copy-paste command
-    list for scripted workflows.
+    list for scripted workflows. Option 5 is the resume/extend path —
+    finds the latest epoch_<N>.pt for any prior run (including ones the
+    user Ctrl+C'd) and extends training by a chosen number of epochs.
     """
     print(f"\n{BOLD}What do you want to run?{RESET}")
     print(f"  {CYAN}1{RESET}) Dry run         {DIM}(5-epoch pipeline smoke test — always do this first){RESET}")
     print(f"  {CYAN}2{RESET}) Seed-variance   {DIM}(full fine-tune from HF init — the 6-machine plan){RESET}")
     print(f"  {CYAN}3{RESET}) Evaluate HF     {DIM}(Regime A — all 3 paper checkpoints, no training){RESET}")
     print(f"  {CYAN}4{RESET}) Show commands   {DIM}(print copy-paste commands and exit){RESET}")
+    print(f"  {CYAN}5{RESET}) Resume/extend   {DIM}(continue a finished or Ctrl+C'd run for N more epochs){RESET}")
     print(f"  {CYAN}Q{RESET}) Quit")
 
     choice = _prompt("Pick", default="Q").upper()
@@ -628,6 +973,10 @@ def _interactive_launcher() -> None:
 
     if choice == "4":
         _print_copy_paste_commands()
+        return
+
+    if choice == "5":
+        _resume_training_picker()
         return
 
     if choice in ("1", "2"):

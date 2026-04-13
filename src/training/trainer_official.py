@@ -12,6 +12,7 @@ import csv
 import json
 import os
 import re
+import shutil
 import sys
 import time
 import warnings
@@ -44,6 +45,17 @@ class _TqdmNewlineFile:
     _ANSI_CURSOR_MOVE = re.compile(r"\x1b\[\d*[AFJK]")
 
     def __init__(self, fp):
+        # Reconfigure the underlying stream to UTF-8 so the unicode block
+        # characters used in the progress bar (▕ ▏ ▎ ▍ ▌ ▋ ▊ ▉ █) don't
+        # raise UnicodeEncodeError on legacy Windows consoles that default
+        # to cp1252. `reconfigure` is a no-op on streams that don't support
+        # it; `backslashreplace` keeps any future non-encodable byte from
+        # crashing training mid-epoch.
+        if hasattr(fp, "reconfigure"):
+            try:
+                fp.reconfigure(encoding="utf-8", errors="backslashreplace")
+            except Exception:
+                pass
         self.fp = fp
 
     def write(self, s: str) -> None:
@@ -58,6 +70,18 @@ class _TqdmNewlineFile:
 
     def flush(self) -> None:
         self.fp.flush()
+
+    # tqdm probes terminal size (for `dynamic_ncols`) by calling `.fileno()`
+    # on the file object it was constructed with, then handing that fd to an
+    # ioctl / shutil.get_terminal_size() call. Forward to the wrapped fp so
+    # tqdm sees the real stderr fd and can detect the actual terminal width
+    # — without this, tqdm falls back to a fixed 80 columns regardless of
+    # how wide the terminal is.
+    def fileno(self) -> int:
+        return self.fp.fileno()
+
+    def isatty(self) -> bool:
+        return getattr(self.fp, "isatty", lambda: False)()
 
 from src.models.losses_official import ACTLossHead
 from src.training.carbon_tracker import CarbonTracker
@@ -310,52 +334,67 @@ class OfficialTRMTrainer:
         # as a standalone chart (it'd just be a 1:1 line, noise).
         wandb.define_metric("epoch", hidden=True)
 
-        # Every namespace plots against epoch. One call per prefix covers
-        # all current and future metrics under that prefix.
-        for namespace in ("train/*", "val/*", "carbon/*", "system/*"):
-            wandb.define_metric(namespace, step_metric="epoch")
+        # =====================================================================
+        # ORDERING CONTRACT — every define_metric call below is val/ FIRST,
+        # then train/, carbon/, system/. wandb's workspace renders panels in
+        # the order metrics are first registered (define_metric counts as
+        # registration), so the val/ section appears above train/ in the
+        # dashboard. Do NOT reshuffle these blocks unless you want the
+        # workspace to flip — train/* gets logged on every epoch while val/*
+        # only fires at eval_interval, so without this ordering the train
+        # section dominates by sheer log frequency.
+        # =====================================================================
 
-        # --- Summary aggregations ---
-        # Validation accuracy: max is the thesis headline number.
-        wandb.define_metric("val/puzzle_acc", summary="max")
-        wandb.define_metric("val/cell_acc", summary="max")
+        # 1. PRIORITY — headline thesis numbers, pinned to the very top.
+        #    Defined BEFORE the namespace globs so they are the first
+        #    explicit metrics wandb sees (globs come after, register the
+        #    rest implicitly when first logged).
+        for m in ("val/exact_accuracy", "val/puzzle_acc", "val/cell_acc"):
+            wandb.define_metric(m, step_metric="epoch", summary="max")
 
-        # Validation losses: min.
+        # 2. Validation losses (min — small is good).
         for m in ("val/lm_loss", "val/q_halt_loss", "val/q_continue_loss"):
-            wandb.define_metric(m, summary="min")
+            wandb.define_metric(m, step_metric="epoch", summary="min")
 
-        # Training accuracy: max (sanity-check signal that train > val).
+        # 3. Validation halting dynamics — diagnostic for ACT collapse.
+        for m in ("val/avg_act_steps", "val/q_halt_acc", "val/frac_at_max_steps"):
+            wandb.define_metric(m, step_metric="epoch", summary="max")
+
+        # 4. Namespace glob for any future val/* metric not enumerated above.
+        #    Has to be in this position (after explicit val/* metrics, before
+        #    train/*) so newly-added val metrics still beat train/ panels to
+        #    registration.
+        wandb.define_metric("val/*", step_metric="epoch")
+
+        # 5. Training accuracy (max — sanity check that train > val).
         for m in ("train/accuracy", "train/exact_accuracy", "train/q_halt_accuracy"):
-            wandb.define_metric(m, summary="max")
+            wandb.define_metric(m, step_metric="epoch", summary="max")
 
-        # Training losses: min.
+        # 6. Training losses (min).
         for m in ("train/lm_loss", "train/q_halt_loss", "train/q_continue_loss"):
-            wandb.define_metric(m, summary="min")
+            wandb.define_metric(m, step_metric="epoch", summary="min")
 
-        # Throughput / wall-clock: mean is the useful aggregate (single epoch
-        # may be noisy — mean across the whole run is the steady-state rate).
-        wandb.define_metric("train/samples_per_sec", summary="mean")
-        wandb.define_metric("train/epoch_time_sec", summary="mean")
+        # 7. Throughput / wall-clock — mean across run is steady-state rate.
+        for m in ("train/samples_per_sec", "train/epoch_time_sec"):
+            wandb.define_metric(m, step_metric="epoch", summary="mean")
 
-        # Halting dynamics: frac_at_max_steps trending high means the model
-        # is hitting the ACT ceiling (failure mode signal). Max surfaces the
-        # worst epoch in the overview card so it's impossible to miss.
-        wandb.define_metric("train/frac_at_max_steps", summary="max")
+        # 8. Train halting dynamics — high values flag ACT-ceiling failures.
+        wandb.define_metric("train/frac_at_max_steps", step_metric="epoch", summary="max")
 
-        # Carbon counters are monotonically increasing — last value IS the
-        # cumulative total. wandb's default is already "last", but we set it
-        # explicitly so the intent is readable in the code.
-        wandb.define_metric("carbon/emissions_kg", summary="last")
-        wandb.define_metric("carbon/energy_kwh", summary="last")
+        # 9. Learning rate snapshot — post-warmup steady-state value.
+        wandb.define_metric("train/lr", step_metric="epoch", summary="last")
 
-        # Peak GPU memory across epochs = the true high-water mark, which is
-        # what matters for sizing batch_size on a new machine.
-        wandb.define_metric("system/gpu_mem_gb", summary="max")
+        # 10. Namespace glob for any other train/* metric.
+        wandb.define_metric("train/*", step_metric="epoch")
 
-        # Learning rate schedule: paper-faithful flat-after-warmup (lr_lambda
-        # at line ~178 returns 1.0 forever after warmup_steps). Sorting by
-        # "last" gives the post-warmup steady-state value.
-        wandb.define_metric("train/lr", summary="last")
+        # 11. Carbon counters — monotonic, last value IS cumulative total.
+        for m in ("carbon/emissions_kg", "carbon/energy_kwh"):
+            wandb.define_metric(m, step_metric="epoch", summary="last")
+        wandb.define_metric("carbon/*", step_metric="epoch")
+
+        # 12. System resource peaks — high-water mark for sizing.
+        wandb.define_metric("system/gpu_mem_gb", step_metric="epoch", summary="max")
+        wandb.define_metric("system/*", step_metric="epoch")
 
         # Top-level thesis-favourite: best_puzzle_acc is already tracked
         # internally via self.best_acc and printed on every log interval,
@@ -485,8 +524,60 @@ class OfficialTRMTrainer:
             return f"{seconds / 3600:.1f}h"
         return f"{seconds / 60:.0f}m"
 
-    BAR_FORMAT = "  {desc}{n_fmt}/{total_fmt} |{bar}| [{elapsed}<{remaining}, {rate_fmt}] {postfix}"
-    EPOCH_BAR_FORMAT = "{desc}{n_fmt}/{total_fmt} |{bar}| [{elapsed}<{remaining}] {postfix}"
+    # Visual constants for the tqdm progress bars. Routed through
+    # _TqdmNewlineFile, which means stderr isn't a tty from tqdm's POV —
+    # without `ascii=_BAR_FILL` and `dynamic_ncols=False` on the constructor,
+    # tqdm falls back to its plain digit-subdivision ASCII bar at width 10.
+    _BAR_FILL = " ▏▎▍▌▋▊▉█"  # 8 sub-block subdivisions per cell
+
+    # NOTE: `{bar}` (no width spec) lets tqdm compute the fill width as
+    # `ncols - len(everything-else-in-the-format-string)`. Combined with
+    # `dynamic_ncols=True` on the constructor, the bar re-stretches to fill
+    # the current terminal width on each refresh. For that to work, tqdm
+    # must be able to probe terminal size through the `file=` object — see
+    # `_TqdmNewlineFile.fileno` / `isatty` below, which forward to the
+    # underlying tty so tqdm's ioctl-based size probe succeeds.
+    # Note the lack of whitespace between `{rate_fmt}` and `{postfix}` (and
+    # between `{remaining}` and `{postfix}` on the epoch bar): tqdm's
+    # `format_meter` unconditionally prepends `", "` to any non-empty
+    # postfix string, so letting that auto-comma supply the separator keeps
+    # the rendered line free of a dangling `  , loss=...` wart.
+    BAR_FORMAT = (
+        "  {desc}{n_fmt:>3}/{total_fmt:<3} ▕{bar}▏ "
+        "{elapsed}<{remaining} · {rate_fmt}{postfix}"
+    )
+    EPOCH_BAR_FORMAT = (
+        "{desc}{n_fmt:>4}/{total_fmt:<4} ▕{bar}▏ "
+        "{elapsed}<{remaining}{postfix}"
+    )
+
+    @staticmethod
+    def _fmt_train_postfix(loss: float, act: float, step: int) -> str:
+        # Fixed-width columns so values stay vertically aligned across iters
+        # in the append-only newline log — much easier to scan than tqdm's
+        # default `, key=val` rendering, which jitters with value width.
+        return f"loss={loss:6.3f}  act={act:4.1f}  step={step:>7d}"
+
+    @staticmethod
+    def _fmt_epoch_postfix(loss: float, best: float, step: int) -> str:
+        return f"best={best:6.3f}  loss={loss:6.3f}  step={step:>7d}"
+
+    @staticmethod
+    def _fmt_eval_postfix(cell: float, puzzle: float) -> str:
+        return f"cell={cell:6.3f}  puzzle={puzzle:6.3f}"
+
+    @staticmethod
+    def _term_width() -> int:
+        # shutil.get_terminal_size order of resolution:
+        #   1. `COLUMNS` env var (if set)
+        #   2. os.get_terminal_size() on stdout — works in a real tty
+        #   3. fallback tuple below (160 cols, 24 rows)
+        # Resolved ONCE per tqdm construction so the bar keeps a stable
+        # width for the whole epoch. We prefer this to `dynamic_ncols=True`
+        # because tqdm's dynamic path re-ioctls on every refresh — which
+        # fails (→ 80-col fallback) whenever stderr is teed / piped to a
+        # log file, even though the attached terminal may be wider.
+        return shutil.get_terminal_size((160, 24)).columns
 
     def train(self) -> None:
         self._init_log()
@@ -503,6 +594,8 @@ class OfficialTRMTrainer:
             total=self.tc.epochs,
             leave=True,
             bar_format=self.EPOCH_BAR_FORMAT,
+            ascii=self._BAR_FILL,
+            ncols=self._term_width(),
             file=_TqdmNewlineFile(sys.stderr),
             mininterval=0,
         )
@@ -529,10 +622,12 @@ class OfficialTRMTrainer:
             train_halt_tensor = metrics.pop("_halt_steps_tensor", None)
             n_samples_seen = metrics.pop("_n_samples_seen", 0)
 
-            epoch_iter.set_postfix(
-                step=self.global_step,
-                loss=f"{metrics['lm_loss']:.3f}",
-                best=f"{self.best_acc:.3f}",
+            epoch_iter.set_postfix_str(
+                self._fmt_epoch_postfix(
+                    loss=metrics["lm_loss"],
+                    best=self.best_acc,
+                    step=self.global_step,
+                )
             )
 
             if self.use_wandb:
@@ -727,6 +822,8 @@ class OfficialTRMTrainer:
             self.train_loader,
             desc=f"train e{epoch + 1} ",
             bar_format=self.BAR_FORMAT,
+            ascii=self._BAR_FILL,
+            ncols=self._term_width(),
             leave=False,
             file=_TqdmNewlineFile(sys.stderr),
             mininterval=1.0,
@@ -795,10 +892,18 @@ class OfficialTRMTrainer:
                 totals[k] = totals.get(k, 0) + v
             n_batches += 1
 
-            pbar.set_postfix(
-                step=self.global_step,
-                act=f"{normalized['avg_steps']:.1f}",
-                loss=f"{normalized['lm_loss']:.3f}",
+            # refresh=False: update postfix state only. The next iteration's
+            # auto refresh (gated by mininterval=1.0) will pick up the new
+            # values in a single write — without this, set_postfix forces
+            # an extra refresh per iter, doubling every line in the newline
+            # log (one from update(1), one from set_postfix).
+            pbar.set_postfix_str(
+                self._fmt_train_postfix(
+                    loss=normalized["lm_loss"],
+                    act=normalized["avg_steps"],
+                    step=self.global_step,
+                ),
+                refresh=False,
             )
 
         epoch_metrics: dict = {k: v / max(1, n_batches) for k, v in totals.items()}
@@ -846,6 +951,8 @@ class OfficialTRMTrainer:
             self.val_loader,
             desc="eval ",
             bar_format=self.BAR_FORMAT,
+            ascii=self._BAR_FILL,
+            ncols=self._term_width(),
             leave=False,
             file=_TqdmNewlineFile(sys.stderr),
             miniters=50,
@@ -904,9 +1011,11 @@ class OfficialTRMTrainer:
 
             # refresh=False: update postfix state only. tqdm's 50-iter auto
             # refresh (configured above) will pick up the latest values.
-            pbar.set_postfix(
-                cell=f"{total_cell_correct / max(1, total_cells):.3f}",
-                puzzle=f"{total_puzzle_correct / max(1, total_puzzles):.3f}",
+            pbar.set_postfix_str(
+                self._fmt_eval_postfix(
+                    cell=total_cell_correct / max(1, total_cells),
+                    puzzle=total_puzzle_correct / max(1, total_puzzles),
+                ),
                 refresh=False,
             )
 
