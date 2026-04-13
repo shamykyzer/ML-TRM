@@ -348,8 +348,16 @@ class OfficialTRMTrainer:
         # 1. PRIORITY — headline thesis numbers, pinned to the very top.
         #    Defined BEFORE the namespace globs so they are the first
         #    explicit metrics wandb sees (globs come after, register the
-        #    rest implicitly when first logged).
-        for m in ("val/exact_accuracy", "val/puzzle_acc", "val/cell_acc"):
+        #    rest implicitly when first logged). We register the
+        #    symmetric-with-train aliases (val/accuracy, val/exact_accuracy)
+        #    FIRST inside this block so they out-rank the legacy short
+        #    names in the dashboard column order.
+        for m in (
+            "val/accuracy",        # alias of val/cell_acc — symmetric w/ train/accuracy
+            "val/exact_accuracy",  # = puzzle_acc — symmetric w/ train/exact_accuracy
+            "val/puzzle_acc",      # legacy name kept for backward-compat
+            "val/cell_acc",        # legacy name kept for backward-compat
+        ):
             wandb.define_metric(m, step_metric="epoch", summary="max")
 
         # 2. Validation losses (min — small is good).
@@ -357,7 +365,13 @@ class OfficialTRMTrainer:
             wandb.define_metric(m, step_metric="epoch", summary="min")
 
         # 3. Validation halting dynamics — diagnostic for ACT collapse.
-        for m in ("val/avg_act_steps", "val/q_halt_acc", "val/frac_at_max_steps"):
+        #    Both new (val/q_halt_accuracy, val/avg_steps) and legacy
+        #    (val/q_halt_acc, val/avg_act_steps) names registered.
+        for m in (
+            "val/q_halt_accuracy", "val/q_halt_acc",
+            "val/avg_steps",       "val/avg_act_steps",
+            "val/frac_at_max_steps",
+        ):
             wandb.define_metric(m, step_metric="epoch", summary="max")
 
         # 4. Namespace glob for any future val/* metric not enumerated above.
@@ -678,7 +692,17 @@ class OfficialTRMTrainer:
             eff_eval_interval = self.tc.eval_interval or self.tc.log_interval
             new_best = False
 
-            if (epoch + 1) % eff_eval_interval == 0:
+            # Force one extra eval on the FIRST epoch processed by this
+            # process — fires whenever the trainer starts, including after
+            # a --resume. Without this, a resumed run from epoch 500 with
+            # eval_interval=50 has zero val/* data in wandb until epoch 550
+            # (~24 minutes at 28s/epoch), making the dashboard look empty
+            # for the user. The cost is a single extra eval pass per
+            # process invocation, which is one full validation set forward
+            # pass — small relative to the per-epoch training cost.
+            is_first_epoch_of_process = (epoch == self.start_epoch)
+
+            if (epoch + 1) % eff_eval_interval == 0 or is_first_epoch_of_process:
                 last_val = self.evaluate()
 
                 if self.use_wandb:
@@ -1032,14 +1056,32 @@ class OfficialTRMTrainer:
             else 0.0
         )
 
+        # Naming aliases — the train side uses `accuracy`, `exact_accuracy`,
+        # `q_halt_accuracy`, `avg_steps`, and the val side historically used
+        # the shorter `cell_acc`, `puzzle_acc`, `q_halt_acc`, `avg_act_steps`.
+        # The asymmetric naming made val panels look "missing" relative to
+        # their train counterparts in the wandb workspace (no val/accuracy
+        # to pair with train/accuracy). We now emit BOTH names so:
+        #   • old dashboards / CSV consumers reading val/cell_acc still work
+        #   • new lookups for val/accuracy (the symmetric name) succeed
+        # Pure aliasing — both names carry the same value, no extra compute.
+        cell_accuracy = total_cell_correct / max(1, total_cells)
+        puzzle_accuracy = total_puzzle_correct / max(1, total_puzzles)
+        q_halt_accuracy = total_q_halt_correct / max(1, n_samples)
+        avg_steps = total_steps / max(1, n_samples)
+
         return {
-            "cell_acc": total_cell_correct / max(1, total_cells),
-            "puzzle_acc": total_puzzle_correct / max(1, total_puzzles),
-            # puzzle_acc IS exact-puzzle accuracy — exposing under the train
-            # metric name too so the train/ and val/ panels line up in wandb.
-            "exact_accuracy": total_puzzle_correct / max(1, total_puzzles),
-            "avg_act_steps": total_steps / max(1, n_samples),
-            "q_halt_acc": total_q_halt_correct / max(1, n_samples),
+            # Symmetric-with-train names (preferred for new code):
+            "accuracy":         cell_accuracy,    # ↔ train/accuracy
+            "exact_accuracy":   puzzle_accuracy,  # ↔ train/exact_accuracy
+            "q_halt_accuracy":  q_halt_accuracy,  # ↔ train/q_halt_accuracy
+            "avg_steps":        avg_steps,        # ↔ train/avg_steps
+            # Legacy short names (kept for backward compat with CSV / old
+            # wandb workspaces that already reference these keys):
+            "cell_acc":         cell_accuracy,
+            "puzzle_acc":       puzzle_accuracy,
+            "q_halt_acc":       q_halt_accuracy,
+            "avg_act_steps":    avg_steps,
             "frac_at_max_steps": frac_at_max,
             "_halt_steps_tensor": halt_tensor,
         }
