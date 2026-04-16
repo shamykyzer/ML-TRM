@@ -214,5 +214,13 @@ def define_common_metrics(
     if summaries:
         default_summaries.update(summaries)
 
+    # wandb's define_metric currently only accepts suffix globs (e.g. "val/*"),
+    # not infix ones ("val/*_acc"). Any pattern it rejects raises wandb.Error
+    # mid-trainer-init — a fatal stop just to set summary preferences. Swallow
+    # rejections per pattern so unsupported entries degrade to "no preference"
+    # without taking the training run with them.
     for pattern, agg in default_summaries.items():
-        wandb.define_metric(pattern, summary=agg)
+        try:
+            wandb.define_metric(pattern, summary=agg)
+        except wandb.Error:
+            continue

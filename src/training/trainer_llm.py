@@ -11,6 +11,7 @@ from tqdm import tqdm
 from src.training.carbon_tracker import CarbonTracker
 from src.training.wandb_utils import define_common_metrics, init_wandb, weave_op
 from src.utils.config import ExperimentConfig
+from src.utils.seed import set_seed
 
 try:
     import wandb  # needed for wandb.log / wandb.finish when use_wandb=True
@@ -19,8 +20,20 @@ except ImportError:
     WANDB_AVAILABLE = False
 
 
+# Datasets emit label 0 to mean "ignore this position" (pre-filled clue cells in
+# sudoku, walls/start/goal in maze). HuggingFace causal LM uses ignore_index=-100
+# in its internal CrossEntropyLoss, so feeding raw 0s would train the model to
+# predict token 0 at every clue position — silently broken. Remap before forward.
+HF_IGNORE_INDEX = -100
+
+
 class LLMTrainer:
-    """Trainer for fine-tuning LLM baselines (GPT-2 / TinyLlama with LoRA)."""
+    """Trainer for fine-tuning LLM baselines (GPT-2 / SmolLM2 / Qwen / Llama with LoRA).
+
+    Works for both Sudoku-Extreme (seq_len=81, vocab=11) and Maze-Hard
+    (seq_len=900, vocab=6). The dataset/loader is chosen by main.py based on
+    config.data.dataset; this trainer is task-agnostic.
+    """
 
     def __init__(
         self,
@@ -29,6 +42,10 @@ class LLMTrainer:
         val_loader: DataLoader,
         config: ExperimentConfig,
     ):
+        # Reproducibility: LLMTrainer used to skip set_seed, so reruns of the
+        # same YAML produced different LoRA inits and shuffle orders.
+        set_seed(config.seed)
+
         self.model = model
         self.train_loader = train_loader
         self.val_loader = val_loader
@@ -46,8 +63,10 @@ class LLMTrainer:
             weight_decay=0.01,  # NOT 1.0 -- that's TRM-specific
         )
 
-        # Derive a short tag from model name for unique filenames
-        self.model_tag = config.model.llm_name.split("/")[-1].lower().replace("-", "_")
+        # Derive a short tag from model name + dataset for unique filenames
+        # so a sudoku run and a maze run on the same LLM don't collide.
+        model_short = config.model.llm_name.split("/")[-1].lower().replace("-", "_")
+        self.model_tag = f"{model_short}_{config.data.dataset}"
 
         self.carbon = CarbonTracker(
             f"{self.model_tag}_train",
@@ -104,6 +123,9 @@ class LLMTrainer:
                         step=epoch + 1,
                     )
 
+            if (epoch + 1) % self.tc.save_interval == 0:
+                self._save_checkpoint(epoch, f"{self.model_tag}_epoch_{epoch + 1}.pt")
+
         self._save_checkpoint(self.tc.epochs - 1, f"{self.model_tag}_latest.pt")
         emissions = self.carbon.stop()
 
@@ -118,21 +140,34 @@ class LLMTrainer:
         self.model.train()
         total_loss = 0.0
         n_batches = 0
+        accum = max(1, self.tc.grad_accum_steps)
 
+        self.optimizer.zero_grad()
         pbar = tqdm(self.train_loader, desc=f"LLM Epoch {epoch + 1}", leave=False)
-        for inputs, labels in pbar:
+        for step, (inputs, labels) in enumerate(pbar):
             inputs = inputs.to(self.device)
             labels = labels.to(self.device)
 
-            self.optimizer.zero_grad()
-            outputs = self.model(input_ids=inputs, labels=labels)
-            loss = outputs.loss
-            loss.backward()
-            self.optimizer.step()
+            # Remap dataset's ignore sentinel (0) to HF's ignore_index (-100)
+            # so the LoRA only learns to predict target positions, not pad/clues.
+            labels_for_loss = labels.masked_fill(labels == 0, HF_IGNORE_INDEX)
 
-            total_loss += loss.item()
+            outputs = self.model(input_ids=inputs, labels=labels_for_loss)
+            loss = outputs.loss / accum
+            loss.backward()
+
+            if (step + 1) % accum == 0:
+                self.optimizer.step()
+                self.optimizer.zero_grad()
+
+            total_loss += outputs.loss.item()
             n_batches += 1
-            pbar.set_postfix(loss=f"{loss.item():.4f}")
+            pbar.set_postfix(loss=f"{outputs.loss.item():.4f}")
+
+        # Flush trailing micro-batches when len(loader) % accum != 0
+        if (len(self.train_loader) % accum) != 0:
+            self.optimizer.step()
+            self.optimizer.zero_grad()
 
         return {"loss": total_loss / max(1, n_batches)}
 
@@ -150,6 +185,8 @@ class LLMTrainer:
             outputs = self.model(input_ids=inputs)
             preds = outputs.logits.argmax(-1)
 
+            # mask: True at positions the model must predict (label != 0 ignore).
+            # A puzzle is solved when every must-predict position is correct.
             mask = labels != 0
             puzzle_correct = ((preds == labels) | ~mask).all(dim=-1)
             total_correct += puzzle_correct.sum().item()

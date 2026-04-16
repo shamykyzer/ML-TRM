@@ -335,15 +335,40 @@ class OfficialTRMTrainer:
         wandb.define_metric("epoch", hidden=True)
 
         # =====================================================================
-        # ORDERING CONTRACT — every define_metric call below is val/ FIRST,
-        # then train/, carbon/, system/. wandb's workspace renders panels in
-        # the order metrics are first registered (define_metric counts as
-        # registration), so the val/ section appears above train/ in the
-        # dashboard. Do NOT reshuffle these blocks unless you want the
-        # workspace to flip — train/* gets logged on every epoch while val/*
-        # only fires at eval_interval, so without this ordering the train
-        # section dominates by sheer log frequency.
+        # ORDERING CONTRACT — summary/ FIRST so it renders at the very top of
+        # the workspace, then val/, train/, carbon/, system/. wandb's
+        # workspace renders panel sections in the order metrics are first
+        # registered (define_metric counts as registration). Do NOT reshuffle
+        # these blocks unless you want the workspace to flip — train/* gets
+        # logged on every epoch while val/* only fires at eval_interval, so
+        # without this ordering the train section dominates by sheer log
+        # frequency.
         # =====================================================================
+
+        # 0. SUMMARY — thesis-critical metrics pinned to the top of the
+        #    workspace. These are aliases of live metrics already logged under
+        #    val/, train/, carbon/ — duplicated here so the user gets a single
+        #    "at a glance" section combining val accuracy, train accuracy,
+        #    loss, and carbon in one place (wandb groups panels strictly by
+        #    namespace prefix, so without this mirror the same numbers are
+        #    scattered across three sections). Aggregations follow the same
+        #    conventions as the underlying metric: max for accuracies, min
+        #    for losses, last for cumulative counters.
+        for m, agg in (
+            ("summary/val_accuracy",            "max"),
+            ("summary/val_exact_accuracy",      "max"),
+            ("summary/val_q_halt_accuracy",     "max"),
+            ("summary/train_accuracy",          "max"),
+            ("summary/train_exact_accuracy",    "max"),
+            ("summary/train_q_halt_accuracy",   "max"),
+            ("summary/train_loss",              "min"),
+            ("summary/train_q_halt_loss",       "min"),
+            ("summary/train_q_continue_loss",   "min"),
+            ("summary/train_frac_at_max_steps", "max"),
+            ("summary/carbon_emissions_kg",     "last"),
+        ):
+            wandb.define_metric(m, step_metric="epoch", summary=agg)
+        wandb.define_metric("summary/*", step_metric="epoch")
 
         # 1. PRIORITY — headline thesis numbers, pinned to the very top.
         #    Defined BEFORE the namespace globs so they are the first
@@ -681,6 +706,27 @@ class OfficialTRMTrainer:
                 wandb_payload["carbon/emissions_kg"] = carbon_snapshot["emissions_kg"]
                 wandb_payload["carbon/energy_kwh"] = carbon_snapshot["energy_kwh"]
 
+                # Summary-section mirrors — see _define_wandb_metrics step 0.
+                # Key-existence guards so a trainer refactor that renames a key
+                # doesn't crash the run; the summary chart just flatlines until
+                # fixed. frac_at_max_steps is mirrored inside the halt-tensor
+                # branch below (only defined when train_halt_tensor is non-empty).
+                if "accuracy" in metrics:
+                    wandb_payload["summary/train_accuracy"] = metrics["accuracy"]
+                if "exact_accuracy" in metrics:
+                    wandb_payload["summary/train_exact_accuracy"] = metrics["exact_accuracy"]
+                if "q_halt_accuracy" in metrics:
+                    wandb_payload["summary/train_q_halt_accuracy"] = metrics["q_halt_accuracy"]
+                if "lm_loss" in metrics:
+                    wandb_payload["summary/train_loss"] = metrics["lm_loss"]
+                if "q_halt_loss" in metrics:
+                    wandb_payload["summary/train_q_halt_loss"] = metrics["q_halt_loss"]
+                if "q_continue_loss" in metrics:
+                    wandb_payload["summary/train_q_continue_loss"] = metrics["q_continue_loss"]
+                if "train/frac_at_max_steps" in wandb_payload:
+                    wandb_payload["summary/train_frac_at_max_steps"] = wandb_payload["train/frac_at_max_steps"]
+                wandb_payload["summary/carbon_emissions_kg"] = carbon_snapshot["emissions_kg"]
+
                 # Explicit epoch for the step_metric declared in
                 # _define_wandb_metrics — this is the value the dashboard
                 # charts plot against on the x-axis.
@@ -724,6 +770,16 @@ class OfficialTRMTrainer:
                         val_payload["train/halt_steps_hist"] = wandb.Histogram(
                             train_halt_tensor.numpy()
                         )
+
+                    # Summary-section mirrors — see _define_wandb_metrics step 0.
+                    # evaluate() doesn't compute a loss (no loss_head call in the
+                    # eval loop), so there's no val_loss to mirror here.
+                    if "accuracy" in last_val:
+                        val_payload["summary/val_accuracy"] = last_val["accuracy"]
+                    if "exact_accuracy" in last_val:
+                        val_payload["summary/val_exact_accuracy"] = last_val["exact_accuracy"]
+                    if "q_halt_accuracy" in last_val:
+                        val_payload["summary/val_q_halt_accuracy"] = last_val["q_halt_accuracy"]
 
                     # Same step_metric contract as the train log above.
                     val_payload["epoch"] = epoch + 1
@@ -842,15 +898,28 @@ class OfficialTRMTrainer:
         # directly comparable on the wandb dashboard.
         halt_steps_chunks: list[torch.Tensor] = []
 
+        # Throttle train bar to one log line per 50 iters. `mininterval=0` +
+        # explicit `miniters=50` makes iteration count the sole gate. Must be
+        # paired with `set_postfix(refresh=False)` inside the loop; otherwise
+        # set_postfix forces a refresh every iter and defeats the throttle.
+        #
+        # `maxinterval=float('inf')` disables tqdm's background TMonitor
+        # thread, which otherwise force-sets `miniters = 1` whenever a bar
+        # hasn't refreshed within `maxinterval` (default 10s). At maze's
+        # ~3s/step, 50 iters ≈ 150s between refreshes — the 10s monitor
+        # trips after ~4 iters, drops miniters to 1, and prints every iter
+        # for the rest of the epoch.
         pbar = tqdm(
             self.train_loader,
-            desc=f"train e{epoch + 1} ",
+            desc=f"train epoch {epoch + 1} ",
             bar_format=self.BAR_FORMAT,
             ascii=self._BAR_FILL,
             ncols=self._term_width(),
             leave=False,
             file=_TqdmNewlineFile(sys.stderr),
-            mininterval=1.0,
+            miniters=50,
+            mininterval=0,
+            maxinterval=float("inf"),
         )
         for batch in pbar:
             batch = {k: v.to(self.device) for k, v in batch.items()}
@@ -966,11 +1035,8 @@ class OfficialTRMTrainer:
         halt_steps_chunks: list[torch.Tensor] = []
         no_act_continue = self.config.model.no_ACT_continue
 
-        # Throttle eval bar to one log line per 50 iters. `mininterval=0` +
-        # explicit `miniters=50` makes iteration count the sole gate (disables
-        # tqdm's dynamic_miniters auto-tuning). Must be paired with
-        # `set_postfix(refresh=False)` below — otherwise set_postfix forces a
-        # refresh every iter and defeats this throttle.
+        # Throttle eval bar to one log line per 50 iters — see the matching
+        # train-bar block for why `maxinterval=float('inf')` is required.
         pbar = tqdm(
             self.val_loader,
             desc="eval ",
@@ -981,6 +1047,7 @@ class OfficialTRMTrainer:
             file=_TqdmNewlineFile(sys.stderr),
             miniters=50,
             mininterval=0,
+            maxinterval=float("inf"),
         )
         for batch in pbar:
             batch = {k: v.to(self.device) for k, v in batch.items()}
