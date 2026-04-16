@@ -120,14 +120,42 @@ def init_wandb(config: ExperimentConfig) -> bool:
         return False
 
     hostname = socket.gethostname()
-    task = config.model.model_type.value
-    run_name = f"{task}_{hostname}_{int(time.time())}"
+    base_task = config.model.model_type.value
 
+    # All 4 LLM-finetune YAMLs (gpt2/smollm/qwen/llama) and both distill
+    # variants share the same model_type enum, so a naked `task` would collapse
+    # the 8-run LLM × {sudoku,maze} sweep into one undistinguishable label in
+    # the wandb sidebar. Synthesize a richer task_label from llm_name + dataset
+    # so every row in the sweep gets a unique name (e.g. llm_qwen2_5_0_5b_maze).
+    if base_task in ("llm_finetune", "llm_distill"):
+        llm_short = (
+            config.model.llm_name.split("/")[-1]
+            .lower()
+            .replace("-", "_")
+            .replace(".", "_")
+        )
+        dataset = config.data.dataset
+        kind = "distill" if base_task == "llm_distill" else "llm"
+        task_label = f"{kind}_{llm_short}_{dataset}"
+        extra_tags = [llm_short, dataset]
+    else:
+        task_label = base_task
+        extra_tags = []
+
+    seed = config.seed
+    run_name = f"{task_label}_seed{seed}_{hostname}_{int(time.time())}"
+    tags = [task_label, hostname, f"seed{seed}", *extra_tags]
+
+    # `group` lets wandb's UI fold multi-seed runs of the same (model, dataset)
+    # together; `job_type` distinguishes seeds inside that group. Together they
+    # turn the runs table into a clean grid: rows = task_label, cols = seedN.
     wandb.init(
         entity=tc.wandb_entity or None,
         project=tc.wandb_project,
         name=run_name,
-        tags=[task, hostname],
+        group=task_label,
+        job_type=f"seed{seed}",
+        tags=tags,
         config=config.model_dump(),
     )
     print(f"[W&B] Run: {run_name}")
@@ -214,5 +242,13 @@ def define_common_metrics(
     if summaries:
         default_summaries.update(summaries)
 
+    # wandb's define_metric currently only accepts suffix globs (e.g. "val/*"),
+    # not infix ones ("val/*_acc"). Any pattern it rejects raises wandb.Error
+    # mid-trainer-init — a fatal stop just to set summary preferences. Swallow
+    # rejections per pattern so unsupported entries degrade to "no preference"
+    # without taking the training run with them.
     for pattern, agg in default_summaries.items():
-        wandb.define_metric(pattern, summary=agg)
+        try:
+            wandb.define_metric(pattern, summary=agg)
+        except wandb.Error:
+            continue

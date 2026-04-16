@@ -217,7 +217,6 @@ def _run_train_once(config: ExperimentConfig, resume: str = "", init_weights: st
         trainer.train()
 
     elif model_type == ModelType.LLM_FINETUNE:
-        from src.data.sudoku_dataset import get_sudoku_loaders
         from src.models.baseline_llm import BaselineLLM
         from src.training.trainer_llm import LLMTrainer
 
@@ -229,11 +228,23 @@ def _run_train_once(config: ExperimentConfig, resume: str = "", init_weights: st
         )
         print(f"LLM trainable params: {model.trainable_param_count():,} / {model.total_param_count():,}")
 
-        train_loader, val_loader = get_sudoku_loaders(
-            config.data.data_dir,
-            batch_size=config.training.batch_size,
-            num_workers=config.data.num_workers,
-        )
+        # Pick the loader matching the dataset declared in the YAML. Both
+        # sudoku and maze datasets emit (input_ids, labels) with label=0
+        # marking ignore positions; trainer_llm handles the HF -100 remap.
+        if config.data.dataset == "maze":
+            from src.data.maze_dataset import get_maze_loaders
+            train_loader, val_loader = get_maze_loaders(
+                config.data.data_dir,
+                batch_size=config.training.batch_size,
+                num_workers=config.data.num_workers,
+            )
+        else:
+            from src.data.sudoku_dataset import get_sudoku_loaders
+            train_loader, val_loader = get_sudoku_loaders(
+                config.data.data_dir,
+                batch_size=config.training.batch_size,
+                num_workers=config.data.num_workers,
+            )
         trainer = LLMTrainer(model, train_loader, val_loader, config)
         trainer.train()
 
@@ -312,19 +323,37 @@ def _run_distill(config: ExperimentConfig, teacher_checkpoint: str) -> None:
 
     import torch
 
-    from src.data.sudoku_dataset import get_sudoku_loaders
     from src.models.distilled_llm import DistilledLLM
     from src.training.trainer_distill import DistillationTrainer
 
-    # Load teacher
     teacher_ckpt = torch.load(teacher_checkpoint, map_location="cpu", weights_only=False)
-    teacher = DistilledLLM(
-        vocab_size=config.model.vocab_size,
-        seq_len=config.model.seq_len,
-    )
-    teacher.load_state_dict(teacher_ckpt["model_state_dict"])
+    teacher_cfg = teacher_ckpt.get("config", {})
+    teacher_model_type = teacher_cfg.get("model", {}).get("model_type", "")
 
-    # Student
+    # Detect teacher type from its saved config so we can distill from EITHER:
+    #   • a fine-tuned BaselineLLM (the headline pipeline — proposal calls this
+    #     out as "compact student model trained to approximate the fine-tuned
+    #     LLM"), OR
+    #   • a previously-trained DistilledLLM (self-distillation, smaller-still).
+    if teacher_model_type == ModelType.LLM_FINETUNE.value:
+        from src.models.baseline_llm import BaselineLLM
+        teacher_model_cfg = teacher_cfg.get("model", {})
+        teacher = BaselineLLM(
+            model_name=teacher_model_cfg.get("llm_name", config.model.llm_name),
+            lora_r=teacher_model_cfg.get("lora_r", config.model.lora_r),
+            lora_alpha=teacher_model_cfg.get("lora_alpha", config.model.lora_alpha),
+            use_qlora=teacher_model_cfg.get("use_qlora", config.model.use_qlora),
+        )
+        teacher.load_state_dict(teacher_ckpt["model_state_dict"])
+        teacher_kind = "baseline_llm"
+    else:
+        teacher = DistilledLLM(
+            vocab_size=config.model.vocab_size,
+            seq_len=config.model.seq_len,
+        )
+        teacher.load_state_dict(teacher_ckpt["model_state_dict"])
+        teacher_kind = "distilled_llm"
+
     student = DistilledLLM(
         vocab_size=config.model.vocab_size,
         seq_len=config.model.seq_len,
@@ -333,15 +362,27 @@ def _run_distill(config: ExperimentConfig, teacher_checkpoint: str) -> None:
         ff_hidden=config.model.distill_ff_hidden,
         n_heads=config.model.distill_n_heads,
     )
-    print(f"Student params: {student.param_count():,}")
+    print(f"Teacher: {teacher_kind} | Student params: {student.param_count():,}")
 
-    train_loader, val_loader = get_sudoku_loaders(
-        config.data.data_dir,
-        batch_size=config.training.batch_size,
-        num_workers=config.data.num_workers,
+    if config.data.dataset == "maze":
+        from src.data.maze_dataset import get_maze_loaders
+        train_loader, val_loader = get_maze_loaders(
+            config.data.data_dir,
+            batch_size=config.training.batch_size,
+            num_workers=config.data.num_workers,
+        )
+    else:
+        from src.data.sudoku_dataset import get_sudoku_loaders
+        train_loader, val_loader = get_sudoku_loaders(
+            config.data.data_dir,
+            batch_size=config.training.batch_size,
+            num_workers=config.data.num_workers,
+        )
+
+    trainer = DistillationTrainer(
+        teacher, student, train_loader, val_loader, config,
+        teacher_kind=teacher_kind,
     )
-
-    trainer = DistillationTrainer(teacher, student, train_loader, val_loader, config)
     trainer.train()
 
 

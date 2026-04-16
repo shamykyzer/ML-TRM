@@ -17,7 +17,7 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
-from typing import Callable, List, Tuple
+from typing import Callable, List, Optional, Tuple
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 os.chdir(ROOT)
@@ -75,18 +75,18 @@ HF_REMAPPED_SUDOKU_MLP = os.path.join(ROOT, "hf_checkpoints", "Sudoku-Extreme-ml
 HF_REMAPPED_SUDOKU_ATT = os.path.join(ROOT, "hf_checkpoints", "Sudoku-Extreme-att", "remapped_for_local.pt")
 HF_REMAPPED_MAZE = os.path.join(ROOT, "hf_checkpoints", "Maze-Hard", "remapped_for_local.pt")
 
-# The six-seed-per-task fleet plan: machine index (1..6) -> (task, seed).
-# Machines 1-2 run sudoku-mlp seeds 0-1, machines 3-4 run maze seeds 0-1,
-# machine 5 runs the Qwen LLM baseline for the proposal's three-way
-# comparison, machine 6 is the spare (or a second LLM run). Each machine
-# takes one task AND one seed so per-seed output dirs are unambiguous.
+# The six-seed fleet plan: machine index (1..6) -> (task, seed).
+# Machines 1-3 run sudoku-att seeds 0-2; machines 4-6 run maze seeds 3-5.
+# Three seeds per task gives mean ± std for the sudoku vs maze comparison.
+# Each machine owns one (task, seed) pair so per-seed output dirs
+# (<task>-seed<N>) are unambiguous.
 FLEET_PLAN: List[Tuple[int, str, int]] = [
-    (1, "sudoku-mlp", 0),
-    (2, "sudoku-mlp", 1),
-    (3, "maze", 0),
-    (4, "maze", 1),
-    (5, "llm-sudoku", 0),
-    (6, "sudoku-mlp", 2),
+    (1, "sudoku-att", 0),
+    (2, "sudoku-att", 1),
+    (3, "sudoku-att", 2),
+    (4, "maze", 3),
+    (5, "maze", 4),
+    (6, "maze", 5),
 ]
 
 # Where per-seed outputs land. MUST be a local non-OneDrive path: the 6-box
@@ -153,12 +153,18 @@ def _default_work_dir() -> str:
     _DEFAULT_WORK_DIR_CACHE = candidates[-1]
     return _DEFAULT_WORK_DIR_CACHE
 
-# Task dispatch table — single source of truth for the 4 fine-tuneable tasks.
+# Task dispatch table — single source of truth for every fine-tuneable task.
 # Used by both the interactive launcher and the printed copy-paste commands.
-# An empty init string means "random init" (only llm-sudoku, which loads its
-# own HF weights via transformers). sudoku-att and sudoku-mlp share one model
-# type enum but different YAML configs — trm_official_sudoku.yaml is the
-# attention variant (mlp_t=false), trm_official_sudoku_mlp.yaml is MLP-t.
+# An empty init string means "random init" (the LLM tasks load their own HF
+# weights via transformers; only the TRM tasks accept a remapped HF init).
+# sudoku-att and sudoku-mlp share one model type enum but different YAMLs —
+# trm_official_sudoku.yaml is the attention variant (mlp_t=false),
+# trm_official_sudoku_mlp.yaml is MLP-t.
+#
+# LLM coverage: every LLM × {sudoku, maze} so the coursework's three-way
+# comparison (TRM vs fine-tuned LLM vs distilled student) has a full scaling
+# sweep on both reasoning tasks. Sudoku and maze configs differ in vocab_size
+# (11 vs 6), seq_len (81 vs 900), and per-LLM batch_size + grad_accum_steps.
 TASK_DISPATCH = {
     "sudoku-mlp": (
         "configs/trm_official_sudoku_mlp.yaml",
@@ -175,11 +181,14 @@ TASK_DISPATCH = {
         HF_REMAPPED_MAZE,
         "Maze-Hard 30x30 (paper 85.30%)",
     ),
-    "llm-sudoku": (
-        "configs/llm_qwen.yaml",
-        "",
-        "Qwen2.5-0.5B LoRA on Sudoku",
-    ),
+    "llm-gpt2-sudoku":   ("configs/llm_config.yaml",        "", "GPT-2 (124M) LoRA on Sudoku"),
+    "llm-smollm-sudoku": ("configs/llm_smollm.yaml",        "", "SmolLM2-360M LoRA on Sudoku"),
+    "llm-qwen-sudoku":   ("configs/llm_qwen.yaml",          "", "Qwen2.5-0.5B LoRA on Sudoku"),
+    "llm-llama-sudoku":  ("configs/llm_llama.yaml",         "", "Llama-3.2-1B LoRA on Sudoku"),
+    "llm-gpt2-maze":     ("configs/llm_gpt2_maze.yaml",     "", "GPT-2 (124M) LoRA on Maze"),
+    "llm-smollm-maze":   ("configs/llm_smollm_maze.yaml",   "", "SmolLM2-360M LoRA on Maze"),
+    "llm-qwen-maze":     ("configs/llm_qwen_maze.yaml",     "", "Qwen2.5-0.5B LoRA on Maze"),
+    "llm-llama-maze":    ("configs/llm_llama_maze.yaml",    "", "Llama-3.2-1B LoRA on Maze"),
 }
 
 
@@ -403,7 +412,7 @@ def _bootstrap_data() -> None:
     """Download whichever datasets are missing."""
     data_dir = os.path.join(ROOT, "data")
     sudoku_ok = os.path.exists(os.path.join(data_dir, "sudoku-extreme-full/train/all__inputs.npy"))
-    maze_ok = os.path.exists(os.path.join(data_dir, "maze-30x30-hard-1k/train/all__inputs.npy"))
+    maze_ok = os.path.exists(os.path.join(data_dir, "maze-30x30-hard-1k-aug/train/all__inputs.npy"))
 
     if not sudoku_ok:
         print(f"{CYAN}Downloading Sudoku dataset...{RESET}")
@@ -414,10 +423,16 @@ def _bootstrap_data() -> None:
         ], cwd=data_dir)
 
     if not maze_ok:
-        print(f"{CYAN}Downloading Maze dataset...{RESET}")
+        # `--aug` enables 8× dihedral augmentation on the train split (1000
+        # → 8000 samples). Without it the maze train set saturates train
+        # accuracy in a few hundred epochs and the learning curve is flat
+        # for the rest of training. Test split is unaffected (aug only
+        # applies to train in build_maze_dataset.py).
+        print(f"{CYAN}Downloading Maze dataset (with 8x dihedral aug)...{RESET}")
         _run([
             PYTHON, "build_maze_dataset.py",
-            "--output-dir", "maze-30x30-hard-1k",
+            "--output-dir", "maze-30x30-hard-1k-aug",
+            "--aug",
         ], cwd=data_dir)
 
 
@@ -556,7 +571,7 @@ def _transfer_ready() -> bool:
 def _data_ready() -> bool:
     return (
         os.path.exists(os.path.join(ROOT, "data/sudoku-extreme-full/train/all__inputs.npy"))
-        and os.path.exists(os.path.join(ROOT, "data/maze-30x30-hard-1k/train/all__inputs.npy"))
+        and os.path.exists(os.path.join(ROOT, "data/maze-30x30-hard-1k-aug/train/all__inputs.npy"))
     )
 
 
@@ -659,24 +674,37 @@ def _prompt(msg: str, default: str = "") -> str:
 def _prompt_task_and_seed() -> Tuple[str, int]:
     """Interactive picker for task label and seed int.
 
-    Shows the 4 tasks as a numbered menu, flags options whose HF init file is
-    missing (such runs still work but start from random init, so they are
-    exploratory rather than paper-faithful). Defaults to seed 0 — the first
-    row of FLEET_PLAN, a safe starter on any machine.
+    Shows every task in TASK_DISPATCH as a numbered menu, grouped TRM-first
+    then LLM, so the operator can scan by family. Tasks whose HF init file is
+    missing get a yellow flag (the run still works — it just starts from
+    random init, exploratory rather than paper-faithful). Defaults to seed 0
+    (first row of FLEET_PLAN, a safe starter on any machine).
     """
     tasks = list(TASK_DISPATCH.keys())
-    print(f"\n{BOLD}Which task?{RESET}")
-    for i, t in enumerate(tasks, 1):
-        _, init, desc = TASK_DISPATCH[t]
-        if init and not os.path.exists(init):
-            suffix = f"  {YELLOW}(HF init missing — will use random init){RESET}"
-        else:
-            suffix = ""
-        print(f"  {CYAN}{i}{RESET}) {t:<12s}  {DIM}{desc}{RESET}{suffix}")
+    trm_tasks = [t for t in tasks if not t.startswith("llm-")]
+    llm_tasks = [t for t in tasks if t.startswith("llm-")]
 
-    choice = _prompt("Pick 1-4", default="1")
+    print(f"\n{BOLD}Which task?{RESET}")
+    print(f"  {DIM}-- TRM (paper architectures) --{RESET}")
+    for t in trm_tasks:
+        i = tasks.index(t) + 1
+        _, init, desc = TASK_DISPATCH[t]
+        suffix = (
+            f"  {YELLOW}(HF init missing — will use random init){RESET}"
+            if init and not os.path.exists(init) else ""
+        )
+        print(f"  {CYAN}{i:>2}{RESET}) {t:<20s}  {DIM}{desc}{RESET}{suffix}")
+    print(f"  {DIM}-- LLM baselines (LoRA fine-tune) --{RESET}")
+    for t in llm_tasks:
+        i = tasks.index(t) + 1
+        _, _, desc = TASK_DISPATCH[t]
+        print(f"  {CYAN}{i:>2}{RESET}) {t:<20s}  {DIM}{desc}{RESET}")
+
+    choice = _prompt(f"Pick 1-{len(tasks)}", default="1")
     try:
         task = tasks[int(choice) - 1]
+        if int(choice) < 1:
+            raise IndexError
     except (ValueError, IndexError):
         print(f"{YELLOW}!!! Invalid task choice '{choice}'.{RESET}")
         sys.exit(2)
@@ -693,14 +721,21 @@ def _prompt_task_and_seed() -> Tuple[str, int]:
     return task, seed
 
 
-def _dispatch_training(task: str, seed: int, dry_run: bool = False) -> None:
-    """Build main.py argv and exec, routing checkpoints to a per-seed local dir.
+def _run_training_subprocess(
+    task: str,
+    seed: int,
+    dry_run: bool = False,
+    epochs: Optional[int] = None,
+) -> int:
+    """Build main.py argv and run a training subprocess. Return its exit code.
 
-    Python twin of `scripts/run_seed.sh <task> <seed>`. Sets TRM_CHECKPOINT_DIR
-    and TRM_EXPERIMENT_DIR in the child env so the trainer writes to
-    <TRM_WORK_DIR>/<task>-seed<N>/, never into the OneDrive-synced repo. Shell
-    launchers are kept for automation (cron, CI); this path is for users who
-    drive everything from start.py interactively.
+    Sets TRM_CHECKPOINT_DIR and TRM_EXPERIMENT_DIR in the child env so the
+    trainer writes to <TRM_WORK_DIR>/<task>-seed<N>/, never into the
+    OneDrive-synced repo.
+
+    Used by both `_dispatch_training` (single-task path that sys.exit's on
+    completion) and `_llm_sweep_launcher` (loop that needs the exit code so it
+    can chain follow-up runs).
     """
     config, init, description = TASK_DISPATCH[task]
 
@@ -717,6 +752,12 @@ def _dispatch_training(task: str, seed: int, dry_run: bool = False) -> None:
         args.extend(["--init-weights", init])
     if dry_run:
         args.extend(["--epochs", "5"])
+        epochs_label = "5 (dry run — pipeline smoke test)"
+    elif epochs is not None:
+        args.extend(["--epochs", str(epochs)])
+        epochs_label = f"{epochs} (overridden via --epochs)"
+    else:
+        epochs_label = "from YAML config.training.epochs"
 
     bar = "=" * 64
     print(f"\n{BOLD}{bar}{RESET}")
@@ -727,11 +768,30 @@ def _dispatch_training(task: str, seed: int, dry_run: bool = False) -> None:
     print(f"  init_weights       : {init_label}")
     print(f"  TRM_CHECKPOINT_DIR : {task_dir}")
     print(f"  TRM_EXPERIMENT_DIR : {task_dir}")
-    print(f"  dry-run            : {'YES (5 epochs)' if dry_run else 'no'}")
+    print(f"  epochs             : {epochs_label}")
     print(f"{BOLD}{bar}{RESET}\n")
 
     result = subprocess.run(args, env=env)
-    sys.exit(result.returncode)
+    return result.returncode
+
+
+def _dispatch_training(
+    task: str,
+    seed: int,
+    dry_run: bool = False,
+    epochs: Optional[int] = None,
+) -> None:
+    """Single-task launcher: run one (task, seed) and exit with its return code.
+
+    Python twin of `scripts/run_seed.sh <task> <seed>`. Shell launchers are
+    kept for automation (cron, CI); this path is for users who drive
+    everything from start.py interactively.
+
+    When `epochs` is passed, it forwards as --epochs N to main.py (overriding
+    YAML's training.epochs for this run only). dry_run wins if both are set.
+    """
+    rc = _run_training_subprocess(task, seed, dry_run=dry_run, epochs=epochs)
+    sys.exit(rc)
 
 
 # ============================================================
@@ -744,13 +804,21 @@ def _dispatch_training(task: str, seed: int, dry_run: bool = False) -> None:
 # `models/maze/`) use the simple-TRM configs. New entries can be added here
 # without touching anything else.
 RESUME_CONFIG_BY_PREFIX: dict = {
-    "sudoku-mlp":      "configs/trm_official_sudoku_mlp.yaml",
-    "sudoku-att":      "configs/trm_official_sudoku.yaml",
-    "sudoku-official": "configs/trm_official_sudoku.yaml",  # legacy alias
-    "maze":            "configs/trm_official_maze.yaml",
-    "llm-sudoku":      "configs/llm_qwen.yaml",
+    "sudoku-mlp":        "configs/trm_official_sudoku_mlp.yaml",
+    "sudoku-att":        "configs/trm_official_sudoku.yaml",
+    "sudoku-official":   "configs/trm_official_sudoku.yaml",  # legacy alias
+    "maze":              "configs/trm_official_maze.yaml",
+    "llm-sudoku":        "configs/llm_qwen.yaml",             # legacy alias
+    "llm-gpt2-sudoku":   "configs/llm_config.yaml",
+    "llm-smollm-sudoku": "configs/llm_smollm.yaml",
+    "llm-qwen-sudoku":   "configs/llm_qwen.yaml",
+    "llm-llama-sudoku":  "configs/llm_llama.yaml",
+    "llm-gpt2-maze":     "configs/llm_gpt2_maze.yaml",
+    "llm-smollm-maze":   "configs/llm_smollm_maze.yaml",
+    "llm-qwen-maze":     "configs/llm_qwen_maze.yaml",
+    "llm-llama-maze":    "configs/llm_llama_maze.yaml",
     # Legacy simple-TRM dirs (trainer_trm.py, not trainer_official.py):
-    "sudoku":          "configs/trm_sudoku.yaml",
+    "sudoku":            "configs/trm_sudoku.yaml",
 }
 
 
@@ -940,6 +1008,201 @@ def _resume_training_picker() -> None:
 
 
 # ============================================================
+# Fresh-start (overwrite) launcher
+# ============================================================
+
+# Fresh-start menu collapses the 8 per-task LLM entries into 4 family combos.
+# Picking a family runs sudoku FIRST then maze, each as its own subprocess
+# (and thus its own wandb run with the enriched name in wandb_utils.py).
+# Tuple shape: (family_label, description, sudoku_task_key, maze_task_key).
+# The two task keys must exist in TASK_DISPATCH or the picker errors loudly
+# at launch — single source of truth for "which configs go with which family".
+LLM_FAMILIES: List[Tuple[str, str, str, str]] = [
+    ("llm-gpt2",   "GPT-2 (124M) LoRA",     "llm-gpt2-sudoku",   "llm-gpt2-maze"),
+    ("llm-smollm", "SmolLM2-360M LoRA",     "llm-smollm-sudoku", "llm-smollm-maze"),
+    ("llm-qwen",   "Qwen2.5-0.5B LoRA",     "llm-qwen-sudoku",   "llm-qwen-maze"),
+    ("llm-llama",  "Llama-3.2-1B LoRA",     "llm-llama-sudoku",  "llm-llama-maze"),
+]
+
+
+def _prompt_fresh_target_and_seed() -> Tuple[str, List[str], int]:
+    """Show TRM tasks + 4 LLM families; return (label, [task, ...], seed).
+
+    TRM picks return a single-element task list; LLM family picks return
+    [sudoku_task, maze_task] so the caller can wipe + run both back-to-back
+    with one prompt instead of forcing the user through option 6 twice per
+    family. Keeps the menu at 7 entries (3 TRM + 4 LLM families) instead of
+    the 11 entries the per-task picker would show.
+    """
+    trm_tasks = [t for t in TASK_DISPATCH if not t.startswith("llm-")]
+    entries: List[Tuple[str, str, List[str]]] = []
+    for t in trm_tasks:
+        _, init, desc = TASK_DISPATCH[t]
+        suffix = (
+            "  (HF init missing — random init)"
+            if init and not os.path.exists(init) else ""
+        )
+        entries.append((t, desc + suffix, [t]))
+    for family, desc, sudoku_task, maze_task in LLM_FAMILIES:
+        entries.append((family, f"{desc}  (sudoku → maze)", [sudoku_task, maze_task]))
+
+    print(f"\n{BOLD}Which target?{RESET}")
+    print(f"  {DIM}-- TRM (paper architectures) --{RESET}")
+    n_trm = len(trm_tasks)
+    for i, (label, desc, _) in enumerate(entries[:n_trm], 1):
+        print(f"  {CYAN}{i:>2}{RESET}) {label:<13s}  {DIM}{desc}{RESET}")
+    print(f"  {DIM}-- LLM families (each runs sudoku then maze) --{RESET}")
+    for i, (label, desc, _) in enumerate(entries[n_trm:], n_trm + 1):
+        print(f"  {CYAN}{i:>2}{RESET}) {label:<13s}  {DIM}{desc}{RESET}")
+
+    choice = _prompt(f"Pick 1-{len(entries)}", default="1")
+    try:
+        idx = int(choice) - 1
+        if idx < 0 or idx >= len(entries):
+            raise IndexError
+    except (ValueError, IndexError):
+        print(f"{YELLOW}!!! Invalid target choice '{choice}'.{RESET}")
+        sys.exit(2)
+    label, _, tasks = entries[idx]
+
+    seed_str = _prompt("Seed (non-negative int)", default="0")
+    try:
+        seed = int(seed_str)
+        if seed < 0:
+            raise ValueError
+    except ValueError:
+        print(f"{YELLOW}!!! Seed must be a non-negative integer, got '{seed_str}'.{RESET}")
+        sys.exit(2)
+
+    return label, tasks, seed
+
+
+def _confirm_wipe_run_dir(task_dir: str) -> bool:
+    """List the contents of task_dir, prompt y/N to delete, then rmtree.
+
+    Returns True if the dir was wiped (or was already empty/absent), False if
+    the user declined or the rmtree failed. Bails after printing instead of
+    raising — callers usually want to abort the whole launcher cleanly.
+    """
+    if not os.path.isdir(task_dir):
+        print(f"{DIM}[fresh-start] no existing dir at {task_dir} — clean launch.{RESET}")
+        return True
+    try:
+        existing = sorted(os.listdir(task_dir))
+    except OSError:
+        existing = []
+    if not existing:
+        return True
+
+    print(f"\n{YELLOW}⚠  Existing run directory will be WIPED:{RESET}")
+    print(f"   {task_dir}")
+    print(f"{DIM}   Contains {len(existing)} item(s):{RESET}")
+    for name in existing[:10]:
+        full = os.path.join(task_dir, name)
+        if os.path.isfile(full):
+            size_mb = os.path.getsize(full) / 1e6
+            size_label = f"  ({size_mb:.1f} MB)" if size_mb >= 0.1 else ""
+            print(f"{DIM}     • {name}{size_label}{RESET}")
+        else:
+            print(f"{DIM}     • {name}/{RESET}")
+    if len(existing) > 10:
+        print(f"{DIM}     ... and {len(existing) - 10} more{RESET}")
+
+    confirm = _prompt(
+        f"\n{BOLD}Delete these and start fresh?{RESET} [y/N]",
+        default="N",
+    ).lower()
+    if confirm not in ("y", "yes"):
+        return False
+    try:
+        shutil.rmtree(task_dir)
+    except OSError as exc:
+        print(f"{YELLOW}!!! Could not remove {task_dir}: {exc}{RESET}")
+        return False
+    print(f"{DIM}[fresh-start] removed {task_dir}{RESET}")
+    return True
+
+
+def _fresh_start_launcher() -> None:
+    """Launch NEW runs for a chosen target+seed, wiping existing run dir(s).
+
+    Counterpart to the resume picker: instead of continuing from the latest
+    epoch_<N>.pt, this path guarantees epoch 0 by deleting everything under
+    <TRM_WORK_DIR>/<task>-seed<N>/ first.
+
+    Two modes, both driven by `_prompt_fresh_target_and_seed`:
+      • TRM pick → wipe + run one task with the chosen epochs (default 2000).
+      • LLM family pick → wipe BOTH the sudoku and maze seed dirs for that
+        family, then run sudoku then maze sequentially as two distinct wandb
+        runs, each capped at the chosen epochs (default 30 — the scaling-
+        comparison cadence).
+
+    A failure in run 1 (sudoku) of an LLM family does NOT abort run 2 (maze):
+    we collect the exit codes and print a summary so the operator can retry
+    only what failed.
+    """
+    label, tasks, seed = _prompt_fresh_target_and_seed()
+    is_family = len(tasks) > 1
+
+    # 30 epochs is the LLM scaling default the user is comparing across the 4
+    # families on both datasets. TRM tasks still default to the long 2000-epoch
+    # cadence the paper-faithful runs need to converge.
+    default_epochs = "30" if is_family else "2000"
+    epochs_str = _prompt("Epochs per task (overrides YAML)", default=default_epochs)
+    try:
+        epochs = int(epochs_str)
+        if epochs <= 0:
+            raise ValueError
+    except ValueError:
+        print(f"{YELLOW}!!! Need a positive integer, got '{epochs_str}'.{RESET}")
+        return
+
+    work_dir = _resolve_work_dir()
+
+    # Per-task wipe pass — confirm once per dir, abort the whole launcher if
+    # the user declines any single confirmation (safer than a partial sweep
+    # against half-stale dirs that would silently resume).
+    for task in tasks:
+        task_dir = os.path.join(work_dir, f"{task}-seed{seed}")
+        if not _confirm_wipe_run_dir(task_dir):
+            print(f"{DIM}Aborted — existing run preserved, nothing launched.{RESET}\n")
+            return
+
+    if not is_family:
+        _dispatch_training(tasks[0], seed, epochs=epochs)
+        return  # unreachable — _dispatch_training calls sys.exit
+
+    bar = "=" * 64
+    print(f"\n{BOLD}{bar}{RESET}")
+    print(f"  {BOLD}LLM family run — {label}{RESET}")
+    print(f"  seed   : {CYAN}{seed}{RESET}")
+    print(f"  epochs : {CYAN}{epochs}{RESET} per task")
+    print(f"  order  : {DIM}{' → '.join(tasks)}{RESET}")
+    print(f"{BOLD}{bar}{RESET}\n")
+
+    results: List[Tuple[str, int]] = []
+    for i, task in enumerate(tasks, 1):
+        print(f"\n{BOLD}>>> [{i}/{len(tasks)}] {task}{RESET}")
+        rc = _run_training_subprocess(task, seed, dry_run=False, epochs=epochs)
+        results.append((task, rc))
+        if rc != 0:
+            print(f"{YELLOW}!!! [{task}] exited {rc} — continuing.{RESET}")
+
+    print(f"\n{BOLD}{bar}{RESET}")
+    print(f"  {BOLD}{label} sweep complete:{RESET}")
+    n_ok = 0
+    for task, rc in results:
+        if rc == 0:
+            mark, color = "✓", GREEN
+            n_ok += 1
+        else:
+            mark, color = "✗", YELLOW
+        print(f"  [{color}{mark}{RESET}] {task:<22s} rc={rc}")
+    print(f"{BOLD}{bar}{RESET}")
+    print(f"  {n_ok}/{len(results)} tasks succeeded.\n")
+
+
+# ============================================================
 # Interactive launcher
 # ============================================================
 
@@ -952,6 +1215,8 @@ def _interactive_launcher() -> None:
     list for scripted workflows. Option 5 is the resume/extend path —
     finds the latest epoch_<N>.pt for any prior run (including ones the
     user Ctrl+C'd) and extends training by a chosen number of epochs.
+    Option 6 is the fresh-start path; for LLM family picks it sequences
+    sudoku → maze as two distinct wandb runs.
     """
     print(f"\n{BOLD}What do you want to run?{RESET}")
     print(f"  {CYAN}1{RESET}) Dry run         {DIM}(5-epoch pipeline smoke test — always do this first){RESET}")
@@ -959,6 +1224,7 @@ def _interactive_launcher() -> None:
     print(f"  {CYAN}3{RESET}) Evaluate HF     {DIM}(Regime A — all 3 paper checkpoints, no training){RESET}")
     print(f"  {CYAN}4{RESET}) Show commands   {DIM}(print copy-paste commands and exit){RESET}")
     print(f"  {CYAN}5{RESET}) Resume/extend   {DIM}(continue a finished or Ctrl+C'd run for N more epochs){RESET}")
+    print(f"  {CYAN}6{RESET}) Fresh start     {DIM}(new run; LLM family picks run sudoku → maze back-to-back){RESET}")
     print(f"  {CYAN}Q{RESET}) Quit")
 
     choice = _prompt("Pick", default="Q").upper()
@@ -977,6 +1243,10 @@ def _interactive_launcher() -> None:
 
     if choice == "5":
         _resume_training_picker()
+        return
+
+    if choice == "6":
+        _fresh_start_launcher()
         return
 
     if choice in ("1", "2"):
@@ -1014,12 +1284,24 @@ def _print_copy_paste_commands() -> None:
         print(f"  {CYAN}scripts/run_seed.sh sudoku-mlp 0 --dry-run{RESET}  {DIM}# 5-epoch smoke{RESET}")
     print()
 
-    print(f"{BOLD}Other (non-fleet) TRM and LLM configs:{RESET}")
+    print(f"{BOLD}Other (non-fleet) TRM configs:{RESET}")
     print(f"  {CYAN}{py} main.py --mode train --config configs/trm_sudoku.yaml --seed 0{RESET}")
-    print(f"  {CYAN}{py} main.py --mode train --config configs/trm_maze.yaml --seed 0{RESET}")
-    print(f"  {CYAN}{py} main.py --mode train --config configs/llm_config.yaml --seed 0{RESET}  {DIM}# GPT-2{RESET}")
+    print(f"  {CYAN}{py} main.py --mode train --config configs/trm_maze.yaml --seed 0{RESET}\n")
+
+    print(f"{BOLD}LLM baselines on Sudoku (LoRA fine-tune):{RESET}")
+    print(f"  {CYAN}{py} main.py --mode train --config configs/llm_config.yaml --seed 0{RESET}  {DIM}# GPT-2 (124M){RESET}")
     print(f"  {CYAN}{py} main.py --mode train --config configs/llm_smollm.yaml --seed 0{RESET}  {DIM}# SmolLM2-360M{RESET}")
+    print(f"  {CYAN}{py} main.py --mode train --config configs/llm_qwen.yaml --seed 0{RESET}    {DIM}# Qwen2.5-0.5B{RESET}")
     print(f"  {CYAN}{py} main.py --mode train --config configs/llm_llama.yaml --seed 0{RESET}   {DIM}# Llama-3.2-1B{RESET}\n")
+
+    print(f"{BOLD}LLM baselines on Maze (LoRA fine-tune):{RESET}")
+    print(f"  {CYAN}{py} main.py --mode train --config configs/llm_gpt2_maze.yaml --seed 0{RESET}    {DIM}# GPT-2 (124M){RESET}")
+    print(f"  {CYAN}{py} main.py --mode train --config configs/llm_smollm_maze.yaml --seed 0{RESET}  {DIM}# SmolLM2-360M{RESET}")
+    print(f"  {CYAN}{py} main.py --mode train --config configs/llm_qwen_maze.yaml --seed 0{RESET}    {DIM}# Qwen2.5-0.5B{RESET}")
+    print(f"  {CYAN}{py} main.py --mode train --config configs/llm_llama_maze.yaml --seed 0{RESET}   {DIM}# Llama-3.2-1B{RESET}\n")
+
+    print(f"{BOLD}Distill a fine-tuned LLM into a small student:{RESET}")
+    print(f"  {CYAN}{py} main.py --mode distill --config configs/llm_qwen.yaml --checkpoint models/llm/qwen2.5_0.5b_sudoku_latest.pt{RESET}\n")
 
     print(f"{BOLD}Evaluate (after training):{RESET}")
     print(f"  {CYAN}{py} main.py --mode eval --config configs/<name>.yaml --checkpoint models/<name>/best.pt{RESET}\n")

@@ -17,7 +17,6 @@ class BaselineLLM(nn.Module):
         lora_r: int = 8,
         lora_alpha: int = 16,
         use_qlora: bool = False,
-        vocab_size: int = 11,
     ):
         super().__init__()
         from peft import LoraConfig, TaskType, get_peft_model

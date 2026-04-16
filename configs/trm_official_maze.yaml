@@ -59,7 +59,12 @@ training:
 
 data:
   dataset: maze
-  data_dir: data/maze-30x30-hard-1k
+  # 8× dihedral-augmented variant: 8000 train / 1000 test (was 1000/1000).
+  # The augmented train set slows the train-accuracy saturation so the
+  # learning curve is informative past the first few hundred epochs.
+  # Rebuild: `python data/build_maze_dataset.py --aug --output-dir maze-30x30-hard-1k-aug`
+  # (run from the data/ dir, or pass an absolute output path).
+  data_dir: data/maze-30x30-hard-1k-aug
   num_workers: 4
 
 seed: 42
