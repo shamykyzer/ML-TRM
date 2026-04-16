@@ -41,6 +41,12 @@ def main() -> int:
     from src.utils.config import load_config
 
     config = load_config("configs/trm_official_maze.yaml")
+    # Optional: override data_dir via argv[1] so we can sweep against either the
+    # in-distribution sapientinc test split or a held-out OOD split generated
+    # by scripts/generate_ood_mazes.py.
+    if len(sys.argv) > 1:
+        config.data.data_dir = sys.argv[1]
+        print(f"[halt_sweep] data_dir overridden to {config.data.data_dir}")
     test_ds = MazeDataset(config.data.data_dir, "test")
     collate_fn = official_collate_fn(config.training.task_id)
 

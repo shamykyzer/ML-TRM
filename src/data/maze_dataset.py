@@ -35,10 +35,22 @@ class MazeDataset(Dataset):
 
     Loads .npy files produced by data/build_maze_dataset.py.
     Token values: 1-5 (CHARSET '#'=1,' '=2,'S'=3,'G'=4,'o'=5), 0=pad.
-    Labels masked: positions where input==label set to 0 (ignore).
+
+    Label masking:
+      mask_non_path=True  (the paper's convention): positions where the input
+         and label agree (walls, open, S, G) are set to 0, which the collate
+         then converts to -100 (ignore) so CE loss only grades path cells.
+         This creates a degenerate optimum — a model that outputs 'o' at every
+         cell minimizes the loss and hits 100% on the masked puzzle_acc metric
+         while learning nothing about mazes. Demonstrated in maze-seed0: 100%
+         standard accuracy, 0% strict accuracy on all-900-cell grading.
+      mask_non_path=False (fix): return the full label unchanged. Every one
+         of the 900 cells participates in the CE loss, forcing the model to
+         correctly reconstruct walls/open/S/G as well as marking the path.
+         Closes the reward-hacking loophole.
     """
 
-    def __init__(self, data_dir: str, split: str = "train"):
+    def __init__(self, data_dir: str, split: str = "train", mask_non_path: bool = True):
         split_dir = os.path.join(data_dir, split)
 
         with open(os.path.join(split_dir, "dataset.json")) as f:
@@ -46,6 +58,7 @@ class MazeDataset(Dataset):
 
         self.inputs = np.load(os.path.join(split_dir, "all__inputs.npy"))
         self.labels = np.load(os.path.join(split_dir, "all__labels.npy"))
+        self.mask_non_path = mask_non_path
 
     def __len__(self) -> int:
         return len(self.inputs)
@@ -54,19 +67,22 @@ class MazeDataset(Dataset):
         inp = torch.tensor(self.inputs[idx], dtype=torch.long)
         lab = torch.tensor(self.labels[idx], dtype=torch.long)
 
-        mask = inp != lab
-        masked_lab = lab.clone()
-        masked_lab[~mask] = 0
-        return inp, masked_lab
+        if self.mask_non_path:
+            mask = inp != lab
+            masked_lab = lab.clone()
+            masked_lab[~mask] = 0
+            return inp, masked_lab
+        return inp, lab
 
 
 def get_maze_loaders(
     data_dir: str,
     batch_size: int = 32,
     num_workers: int = 4,
+    mask_non_path: bool = True,
 ) -> tuple[DataLoader, DataLoader]:
-    train_ds = MazeDataset(data_dir, "train")
-    test_ds = MazeDataset(data_dir, "test")
+    train_ds = MazeDataset(data_dir, "train", mask_non_path=mask_non_path)
+    test_ds = MazeDataset(data_dir, "test", mask_non_path=mask_non_path)
     train_loader = DataLoader(
         train_ds, batch_size=batch_size, shuffle=True,
         num_workers=num_workers, pin_memory=True, drop_last=True,

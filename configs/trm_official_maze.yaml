@@ -66,6 +66,10 @@ data:
   # (run from the data/ dir, or pass an absolute output path).
   data_dir: data/maze-30x30-hard-1k-aug
   num_workers: 4
+  # false = grade all 900 cells (walls, open, S, G, path) in the CE loss.
+  # true = paper's masked behavior, which admits a constant-`o` degenerate
+  # optimum and was responsible for the 100%-but-fake maze-seed0 result.
+  mask_non_path: false
 
 seed: 42
 device: cuda

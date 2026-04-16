@@ -180,8 +180,14 @@ def _run_train_once(config: ExperimentConfig, resume: str = "", init_weights: st
             from src.data.maze_dataset import MazeDataset
             from torch.utils.data import DataLoader
 
-            train_ds = MazeDataset(config.data.data_dir, "train")
-            test_ds = MazeDataset(config.data.data_dir, "test")
+            train_ds = MazeDataset(
+                config.data.data_dir, "train",
+                mask_non_path=config.data.mask_non_path,
+            )
+            test_ds = MazeDataset(
+                config.data.data_dir, "test",
+                mask_non_path=config.data.mask_non_path,
+            )
             train_loader = DataLoader(
                 train_ds, batch_size=config.training.batch_size, shuffle=True,
                 num_workers=config.data.num_workers, pin_memory=True,

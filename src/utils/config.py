@@ -125,6 +125,13 @@ class DataConfig(BaseModel):
     data_dir: str = "data/sudoku-extreme-full"
     num_workers: int = 4
     subsample_size: Optional[int] = None
+    # Maze-only: when True (paper behavior), CE loss ignores non-path cells,
+    # which creates a reward-hacking attractor where a constant-`o` predictor
+    # scores 100% on puzzle_acc without solving any maze. Set False to grade
+    # all 900 cells during training — the model must correctly output walls,
+    # open cells, S, G, AND the path. Fixes the degenerate-optimum issue seen
+    # on maze-seed0.
+    mask_non_path: bool = True
 
 
 class ExperimentConfig(BaseModel):
