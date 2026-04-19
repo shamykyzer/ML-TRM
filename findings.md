@@ -1,32 +1,45 @@
 # ML Engineering Findings — Pre-Fleet Checkpoint
 
 **Author:** Ahmed (ML Engineering Lead)
-**Date:** 2026-04-19
+**Date:** 2026-04-19 (updated afternoon — see §5 for the wandb-aggregation trail)
 **Audience:** Armin, Nick
-**Decision requested:** Sign-off on §4 (what we launch next) before I start the LLM fleet runs.
+**Decisions requested:**
+ - Sign-off on §4 (LLM fleet launch on this machine)
+ - Sign-off on §5.7 (kill all 3 active maze-from-scratch runs on FDK/FCM/FFN; use HF-eval 0.796 as the maze number)
 
 ---
 
 ## TL;DR
 
-1. **Do NOT retrain sudoku-att.** The from-scratch run peaked at 18.33% and collapsed to 0% by epoch 500. Retraining will most likely reproduce the collapse. Our time/compute is better spent elsewhere.
-2. **Our headline TRM-sudoku number is 74.56%** (MLP variant, HF-init + fine-tune). The published MLP checkpoint evaluated on our pipeline gives 84.74%, matching the paper.
-3. **Our headline LLM-sudoku number is 0% puzzle / 19% cell** (Qwen2.5-0.5B, 100 epochs). The thesis holds cleanly.
-4. **Seven of eight LLM runs (the proposal-committed baselines) haven't happened yet.** That's where the remaining ~16 hrs of fleet compute should go, not into another TRM-Att attempt.
+1. **Do NOT retrain sudoku-att.** From-scratch run peaked at 18.33% then collapsed to 0%. Retrain will reproduce the collapse (§2).
+2. **Headline TRM-sudoku: 74.25% mean across 4 runs / 3 seeds (std 0.0063)**, MLP variant, HF-init + fine-tune. Best per seed: s0=0.7456, s1=0.7420, s2=0.7486. Published MLP checkpoint eval-only: **84.74%** (§5.2).
+3. **Headline TRM-maze: 0.796 (HF-eval)**, metric-robust under both mask_non_path settings (§5.6). **Kill the 3 active from-scratch maze fine-tunes** — they are actively *corrupting* the HF weights (val_exact collapsed from 0.789 → 0.11 in one epoch, §5.7).
+4. **Headline LLM-sudoku: 0% puzzle / 19% cell** (Qwen2.5-0.5B, 100 ep). Thesis holds cleanly.
+5. **Seven of eight LLM runs haven't happened yet.** That's where the remaining fleet compute should go once the maze runs are killed.
 
 ---
 
 ## 1. What we've trained so far (audited from logs + summary.csv)
 
+> **Note (added 2026-04-19 afternoon):** this table was drafted from the
+> STU-CZC5277FGD logs only. The full multi-machine fleet view (3 sudoku-mlp
+> seeds + 3 maze seeds across FDK/FCM/FFN/FFS/FDY) is in §5.2.
+> `results/trm_runs_overview.csv` is the authoritative source.
+
 | Run | Variant | Init | Epochs | Peak `val/puzzle_acc` | Wall time | CO₂ (kg) | CO₂/correct | Notes |
 |---|---|---|---|---|---|---|---|---|
 | `sudoku-mlp-seed0` | MLP-Mixer (mlp_t=true) | HF-init from Sanjin2024 Sudoku-Extreme-mlp | 2245 | **0.7456 @ ep 900** | 80 hrs | 5.23 | 1.66 × 10⁻⁵ kg | Overfit: val dropped to 0.5948 by ep 2245; stopped training |
+| `sudoku-mlp-seed1` | MLP-Mixer | HF-init | — | **0.7420** (crashed) | — | 4.15 | — | On STU-CZC5277FFS; see §5.2 |
+| `sudoku-mlp-seed2` | MLP-Mixer | HF-init | — | **0.7486** (killed) | — | 4.39 | — | On STU-CZC5277FDY; see §5.2 |
 | `sudoku-att` | Attention + RoPE (mlp_t=false) | **From scratch** | 500 | **0.1833 @ ep 100** | 16 hrs | 1.65 | 2.12 × 10⁻⁵ kg | Collapsed to 0% by ep 500; train-acc climbed to 0.96 — textbook overfit |
+| `maze-seed0` | Attention (mlp_t=false) | HF-init from Sanjin2024 Maze-Hard | **running** | **0.202** (so far) | ~38 hrs | 3.57 | — | FDK; actively corrupting HF weights — see §5.7, kill recommended |
+| `maze-seed1` | Attention | HF-init | **running** | **0.189** (so far) | ~38 hrs | 3.53 | — | FCM; same kill recommendation |
+| `maze-seed2` | Attention | HF-init | **running** | **0.047** (so far) | ~38 hrs | 3.49 | — | FFN; bad seed, kill ASAP |
 | `llm-qwen-sudoku-seed0` | Qwen2.5-0.5B + LoRA | HF-init | 100 | **0.0000 (cell: 0.1907)** | 7 hrs | 0.21 | ∞ | Eval was broken pre-Fix-B; re-evaluated with `scripts/eval_llm_checkpoint.py` |
 | TRM-MLP sudoku eval-only | MLP-Mixer | HF checkpoint, no training | n/a | **0.8474 (cell: 0.9155)** | 9.5 hrs inference | 0.48 | 1.23 × 10⁻⁶ kg (inference) | `results/trm_official_sudoku_eval.json` |
-| TRM-Att maze eval-only | Attention | HF checkpoint, no training | n/a | **0.7960 (cell: 0.9754)** | 2.2 min inference | 0.002 | 2.51 × 10⁻⁶ kg (inference) | `results/hf_eval_maze_hard.json` |
+| TRM-Att maze eval-only | Attention | HF checkpoint, no training | n/a | **0.7960 / 0.7890** (see §5.6) | 2.2 min inference | 0.002 | 2.51 × 10⁻⁶ kg (inference) | Metric-robust per §5.6; headline maze number |
 
-Full aggregate: `results/summary.csv`. Plot files: `results/figures/sudoku_mlp_peak_and_overfit.png`, `results/figures/sudoku_att_rise_and_collapse.png`.
+Full aggregate: `results/summary.csv` (sudoku) + `results/trm_runs_overview.csv` (multi-machine). Plot files: `results/figures/sudoku_mlp_peak_and_overfit.png`, `results/figures/sudoku_att_rise_and_collapse.png`.
 
 ### Key observations
 
@@ -198,6 +211,81 @@ number and note own-training as an ablation in Discussion.
       training; fresh numbers feed the paper.
 - [ ] **Paper Methods update**: add sentence on the grad-clip finding if M-C is
       pursued; otherwise skip.
+
+### 5.6 Metric-sensitivity check — HF maze under both settings (2026-04-19 eve)
+
+Patched `scripts/eval_hf_checkpoints.py:100` to pass `config.data.mask_non_path`
+into `MazeDataset(...)` instead of using the dataset's default of `True`. Re-ran
+against `hf_checkpoints/Maze-Hard/remapped_for_local.pt`.
+
+| Evaluation | mask_non_path | puzzle_accuracy | cell_accuracy | avg_act_steps | Elapsed |
+|---|---|---|---|---|---|
+| `results/hf_eval_maze_hard_mask_true.json` | True | **0.796** | 0.975 | 16.0 | 133.8s |
+| `results/hf_eval_maze_hard_mask_false.json` | False | **0.789** | 0.993 | 16.0 | 133.4s |
+
+**Key finding:** the two metrics give nearly identical puzzle_accuracy (0.796 vs
+0.789). The HF checkpoint is **not** a reward-hacking artifact — it correctly
+predicts walls, open cells, S, G, AND the path. The metric-choice debate
+(§5.3–5.4) is effectively moot on this checkpoint.
+
+This changes the maze situation:
+
+1. The HF checkpoint at **0.789 (strict) / 0.796 (paper-faithful)** is your
+   maze result. No further training needed to get a defensible number.
+2. The current fine-tune runs are **not just slow — they are actively
+   corrupting a working model.** Epoch 1 val_exact_accuracy is 0.11 for seed 0;
+   the HF init *itself* on the same metric/split scores 0.789. That is a
+   68-point collapse in one epoch of training, which cannot be explained by
+   slow convergence. Likely culprits:
+   - `strict=False` state-dict load shows `[Eval] Loaded 24 keys (missing: 3,
+     unexpected: 0)` — 3 trainable layers are initialized at random, and the
+     first optimizer step corrupts the carefully-aligned HF weights around
+     them.
+   - Combined with `max_grad_norm=1.0` vs grad norms of 80-100, the clipped
+     gradient direction is dominated by the random-init layers, pointing the
+     whole model toward a degenerate basin.
+3. **Option M-C (retrain with `max_grad_norm=5.0`) will not fix this.** The
+   grad-clip change addresses slow convergence; the actual problem is
+   catastrophic first-step corruption. A real fix would require identifying
+   the 3 missing keys and either (a) excluding them from the first N
+   optimizer steps, (b) initializing them to match the HF checkpoint's
+   expected behavior, or (c) freezing the HF-loaded layers for a warmup
+   period. That's a research project, not a 12-day fix.
+
+### 5.7 Revised maze recommendation
+
+**Use Option M-A unchanged (report 0.796 HF-eval as the maze result), plus:**
+
+- **Kill ALL 3 current maze runs** — not just seed 2. Continuing them wastes
+  compute on a known-corrupting training regime.
+- **Report the methodology observation as a paper strength** rather than a
+  limitation: "We verify that the authors' released weights are robust to
+  metric choice (0.796 vs 0.789 under path-masked vs every-cell grading),
+  which is a stronger claim than the paper itself makes."
+- **Skip the max_grad_norm retrain.** Save the compute for the LLM fleet per §4.
+
+### 5.8 Kill-runs commands (per machine)
+
+On each of FDK, FCM, FFN: open the terminal where training is running and
+press Ctrl+C once, or find the python process:
+
+```bash
+# Windows (Git Bash / WSL on training machine)
+ps aux | grep 'main.py --mode train' | grep -v grep
+# take the PID from the output, then:
+kill <PID>
+
+# Powershell equivalent:
+Get-Process python | Where-Object { $_.CommandLine -like '*main.py*train*maze*' } | Stop-Process
+```
+
+Then on wandb.ai, mark the runs as finished (or leave them as "killed" — the
+aggregator already handles that state).
+
+Files changed this session:
+- `scripts/eval_hf_checkpoints.py` (line 100, now respects `config.data.mask_non_path`)
+- `results/hf_eval_maze_hard_mask_true.json` (preserved paper-faithful result)
+- `results/hf_eval_maze_hard_mask_false.json` (new strict-metric result)
 
 ---
 
