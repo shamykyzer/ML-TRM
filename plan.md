@@ -442,7 +442,7 @@ The current code calls both splits `test_loader` — `val_loader` is just an ali
 
 The paper's published Sudoku-Extreme MLP (84.80%) and Maze-Hard (78.70%) results
 were trained on 8×H200 with global batch 4608 for 100K epochs — not reproducible
-on a single RTX 3070 in the available time budget. Instead we **start from the
+on a single RTX 5070 (Blackwell, 12 GB) in the available time budget. Instead we **start from the
 published Sanjin2024 checkpoints as `--init-weights`** and either eval directly
 or fine-tune from them:
 
