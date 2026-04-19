@@ -148,6 +148,14 @@ def main() -> int:
     config = load_config(CONFIG_PATH)
     set_seed(42)
 
+    # Forensic runs should not pollute the shared wandb project with diagnostic
+    # rows that look like real training. OfficialTRMTrainer.__init__ checks
+    # config.training.use_wandb before calling init_wandb, so disabling it
+    # here is sufficient. Same for auto_continue (forensic is a single-step
+    # probe, not a resumable run).
+    config.training.use_wandb = False
+    config.training.auto_continue = False
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[env] device={device} forward_dtype={config.model.forward_dtype}")
     print(f"[env] snap_*.pt output dir: {os.path.abspath(OUT_DIR)}")
