@@ -214,10 +214,16 @@ Git Bash / Linux users. `bootstrap.ps1` is explicitly install-time only.
 - **Making ML-TRM public.** Required for anonymous HTTPS clone. Verified
   before spec sign-off: `wandb_api.txt` is gitignored (line 13 of
   `.gitignore`) and has never been committed. No API keys, tokens, or
-  credentials are in tracked files. Two PDFs are tracked (`papers/02_HRM_Wang_2025.pdf`,
-  `papers/03_BDH_Pathway_2025.pdf`) — if these are publicly-available
-  academic papers, fine; if paywalled, user should remove them from tracked
-  history before going public.
+  credentials are in tracked files.
+- **Papers untracked before going public.** Three arXiv preprints are
+  currently committed under `papers/` (`01_TRM_...pdf`, `02_HRM_...pdf`,
+  `03_BDH_...pdf`, ~15 MB total). The implementation plan will add
+  `papers/*.pdf` to `.gitignore` and run `git rm --cached papers/*.pdf`
+  (non-destructive — files remain on disk). The existing
+  `papers/download.sh` / `download.ps1` fetch them from arXiv on demand, so
+  anyone cloning the repo runs those once to recreate the folder. History is
+  **not** rewritten; the 15 MB in past commits is harmless (public arXiv
+  PDFs, not secrets) and rewriting history is destructive.
 - **`irm | iex` trust model.** Running `irm <URL> | iex` executes whatever is
   at that URL at that moment. Mitigation: the repo is owned by the user. For
   stronger guarantees the one-liner could pin a tag
