@@ -19,13 +19,17 @@ import sys
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Tuple
 
-# ROOT formula updated for the new file location (src/cli/bootstrap.py) so the
-# resolved VALUE of ROOT is byte-identical to what start.py computed pre-move.
-# start.py was at <ROOT>/start.py (one level up); bootstrap.py is at
-# <ROOT>/src/cli/bootstrap.py (three levels up). Only the formula changed —
-# every downstream constant built on ROOT resolves to the same path on disk.
-ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.chdir(ROOT)
+# Path constants + os.chdir(ROOT) now live in src/cli/paths.py so they can
+# be reused by the dashboard, tests, and any future cli module without
+# pulling in the rest of bootstrap.py. Imported values are byte-identical
+# to what this file computed pre-extraction.
+from src.cli.paths import (
+    ROOT,
+    VENV_DIR, PYTHON, PIP, WANDB, ACTIVATE_HINT,
+    REQUIREMENTS_HASH_FILE, REQUIREMENTS_TXT,
+    HF_SOURCE_CKPT, HF_REMAPPED_CKPT, REMAP_SCRIPT, VERIFY_SCRIPT,
+    HF_REMAPPED_SUDOKU_MLP, HF_REMAPPED_SUDOKU_ATT, HF_REMAPPED_MAZE,
+)
 
 # Force UTF-8 on stdout/stderr so the unicode glyphs we print (✓, ▕, ▏, etc)
 # don't crash with UnicodeEncodeError on the default Windows cp1252 console.
@@ -37,48 +41,6 @@ for _stream in (sys.stdout, sys.stderr):
             _stream.reconfigure(encoding="utf-8", errors="backslashreplace")
         except Exception:
             pass
-
-# --- Venv path detection ---
-# Windows uses a shorter path to avoid MAX_PATH issues during pip install.
-if platform.system() == "Windows":
-    VENV_DIR = os.environ.get(
-        "TRM_VENV_DIR",
-        os.path.join(os.path.expanduser("~"), ".venvs", "ml-trm"),
-    )
-    PYTHON = os.path.join(VENV_DIR, "Scripts", "python.exe")
-    PIP = os.path.join(VENV_DIR, "Scripts", "pip.exe")
-    WANDB = os.path.join(VENV_DIR, "Scripts", "wandb.exe")
-    ACTIVATE_HINT = f'"{os.path.join(VENV_DIR, "Scripts", "activate")}"'
-else:
-    VENV_DIR = os.environ.get("TRM_VENV_DIR", os.path.join(ROOT, ".venv"))
-    PYTHON = os.path.join(VENV_DIR, "bin", "python")
-    PIP = os.path.join(VENV_DIR, "bin", "pip")
-    WANDB = os.path.join(VENV_DIR, "bin", "wandb")
-    ACTIVATE_HINT = f"source {os.path.join(VENV_DIR, 'bin', 'activate')}"
-
-# Marker file written into the venv after a successful sync, containing the
-# SHA-1 of requirements.txt at sync time. If the file's current hash differs
-# (or the marker is absent), the `sync` stage re-runs pip install.
-REQUIREMENTS_HASH_FILE = os.path.join(VENV_DIR, ".trm_requirements_hash")
-REQUIREMENTS_TXT = os.path.join(ROOT, "requirements.txt")
-
-# Transfer-learning artifacts: the HF reference TRM checkpoint (trained on
-# ARC-AGI-2) can be remapped into our local TRMOfficial shape and used as
-# `--init-weights` to transfer the ~99.8% reasoning core. This whole pipeline
-# is optional — only runs when the source file is present on disk. See
-# scripts/remap_hf_checkpoint.py for the full rationale.
-HF_SOURCE_CKPT = os.path.join(ROOT, "hf_checkpoints", "ARC", "step_723914")
-HF_REMAPPED_CKPT = os.path.join(ROOT, "hf_checkpoints", "ARC", "remapped_for_local.pt")
-REMAP_SCRIPT = os.path.join(ROOT, "scripts", "remap_hf_checkpoint.py")
-VERIFY_SCRIPT = os.path.join(ROOT, "scripts", "verify_remap_loads.py")
-
-# Per-task remapped HF checkpoints used by the seed-variance fine-tune plan.
-# Each of these is a paper-faithful reference checkpoint that the trainer
-# loads via --init-weights to start close to the published accuracy rather
-# than training from scratch on RTX-5070 compute (which would take months).
-HF_REMAPPED_SUDOKU_MLP = os.path.join(ROOT, "hf_checkpoints", "Sudoku-Extreme-mlp", "remapped_for_local.pt")
-HF_REMAPPED_SUDOKU_ATT = os.path.join(ROOT, "hf_checkpoints", "Sudoku-Extreme-att", "remapped_for_local.pt")
-HF_REMAPPED_MAZE = os.path.join(ROOT, "hf_checkpoints", "Maze-Hard", "remapped_for_local.pt")
 
 # The six-seed fleet plan: machine index (1..6) -> (task, seed).
 # Machines 1-3 run sudoku-att seeds 0-2; machines 4-6 run maze seeds 3-5.
