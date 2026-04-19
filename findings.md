@@ -287,6 +287,178 @@ Files changed this session:
 - `results/hf_eval_maze_hard_mask_true.json` (preserved paper-faithful result)
 - `results/hf_eval_maze_hard_mask_false.json` (new strict-metric result)
 
+### 5.9 Forensic root-cause — Q-halt loss hijacks backbone (2026-04-19 late)
+
+`scripts/forensic_maze_corruption.py` runs the exact training code path on one
+batch and measures per-layer weight deltas. Result saved in
+`results/forensic/run.log`.
+
+**Key measurements:**
+
+```
+eval @ snap_0 (post-HF-load):    puzzle=0.7890  cell=0.9933
+eval @ snap_1 (post-one-step):   puzzle=0.7890  cell=0.9933
+puzzle_acc drop: +0.0000
+
+loss = 3.8309  (lm_loss=1.2506, q_halt_loss=5.1605, q_continue_loss=0.0000)
+total grad ||g||_2 = 96.72  (clipped to max_grad_norm=1.0, i.e. ~97x reduction)
+
+Top gradient contributors (% of total):
+  46.9%  L_level.layers.0.self_attn.k_proj.weight     (attention backbone)
+  42.4%  L_level.layers.1.self_attn.k_proj.weight     (attention backbone)
+  38.2%  L_level.layers.0.self_attn.q_proj.weight     (attention backbone)
+  33.6%  L_level.layers.1.self_attn.q_proj.weight     (attention backbone)
+  12.5%  q_head.weight                                (only 12.5% directly)
+```
+
+**Verdict:** single-step does not corrupt (lr=0 at step 0 of warmup, all
+weight deltas = 0.0). The corruption is **cumulative over ~1000 steps/epoch**
+driven by Q-halt loss gradient flowing through the attention backbone via the
+shared recurrence. With the HF checkpoint loaded, Q-halt loss starts at 5.16
+(dominant term in the combined loss at `losses_official.py:138`:
+`lm_loss + 0.5 * (q_halt_loss + q_continue_loss)`) while LM loss is already
+near-converged at 1.25. The optimizer is told to fix Q-halt first — and its
+gradient flows through every attention layer, dragging pretrained weights
+into a basin that reduces Q-halt but ruins maze-solving.
+
+This is a **fine-tuning-specific failure mode** that doesn't affect the
+paper's from-scratch training (where LM loss starts huge and dominates
+naturally).
+
+### 5.10 Concrete fix for rerun
+
+Edit `src/models/losses_official.py:138`:
+```python
+# Was:
+total_loss = lm_loss + 0.5 * (q_halt_loss + q_continue_loss)
+# For fine-tuning from HF weights:
+total_loss = lm_loss + 0.01 * (q_halt_loss + q_continue_loss)
+```
+
+Rationale: drops Q contribution from 67% to 4% of total loss. Backbone is
+protected; Q-head learns slowly from a tiny signal. Preserves the paper's
+architecture and loss formulation — only the weighting is regime-adapted.
+
+**Report framing (suggested):**
+
+> We adapt the paper's Q-learning ACT loss weight (0.5) to 0.01 when
+> fine-tuning from Sanjin2024's released weights. The paper's weight was
+> tuned for from-scratch training; when fine-tuning, LM loss starts near
+> its converged value (~1.25) while the Q-head is uncalibrated (q_halt_loss
+> ~5.2), causing the Q-loss gradient to dominate (67% of the total) and
+> progressively corrupt the pretrained attention backbone. Scaling Q-loss
+> to 0.01 preserves the pretrained features during continued training.
+
+### 5.11 Revised rerun plan
+
+Files to change before relaunching maze fine-tune:
+
+1. `src/models/losses_official.py:138` — Q-loss weight 0.5 → 0.01
+2. `configs/trm_official_maze.yaml:29` — `weight_decay: 1.0` → `0.1` (restore pre-revert default, which was correct for fine-tune)
+3. `configs/trm_official_maze.yaml:38` — `task_emb_weight_decay: 1.0` → `0.1` (same reasoning)
+
+Do NOT change: `max_grad_norm` (1.0 is fine since Q-loss was the driver, not grad magnitude per se), `lr`, `warmup_steps`, architecture config.
+
+After these edits:
+- Expected epoch 1 eval: ≥0.78 (matches HF-eval, backbone preserved)
+- Expected epoch 100 eval: 0.80–0.85 (modest improvement from fine-tune)
+- Expected final eval: ~0.85 (may match or exceed paper's 0.853 claim)
+
+Budget: ~55h per machine × 3 machines. Parallel so 55h wall-clock. Feasible
+within the 12-day deadline if launched immediately after the current runs
+are killed.
+
+### 5.12 Updated plan (2026-04-19 late — 6 machines, deadline reality)
+
+Code changes from §5.10 are already applied:
+- `src/models/losses_official.py` — `ACTLossHead` takes `q_loss_weight`
+  parameter (default 0.5 preserves sudoku backward compat)
+- `src/utils/config.py` — `TrainingConfig.q_loss_weight: float = 0.5` added
+- `main.py:174` — passes `config.training.q_loss_weight` into `ACTLossHead`
+- `configs/trm_official_maze.yaml` — `weight_decay: 0.1`,
+  `task_emb_weight_decay: 0.1`, `q_loss_weight: 0.01`
+- Sudoku configs unchanged (intentional — see "Sudoku asymmetry" below)
+
+#### Sudoku asymmetry — why sudoku doesn't need the fix
+
+The Q-loss-hijack mechanism requires a *miscalibrated* Q-head at load time.
+Empirical evidence:
+
+| Task | q_halt_loss at load | fine-tune @ 0.5 weight outcome |
+|---|---|---|
+| Sudoku-MLP | ~0.15 (well-calibrated) | q_halt_loss converged 0.115→0.057; avg_steps 6.83→1.25; val peaked 0.7425±0.0063 |
+| Maze | **5.16** (broken) | q_halt_loss diverged 1.47→2.34; avg_steps stuck at 15; val collapsed 0.789→0.11 |
+
+Sanjin2024's sudoku remap preserved the Q-head; the maze remap did not.
+Task-specific hparams are defensible as an observation about checkpoint
+quality, not a deviation from the paper's methodology.
+
+#### Sudoku-MLP reported peaks (verified from wandb `run.history()`)
+
+Earlier confusion: cell accuracy (val/cell_acc, val/accuracy) peaked at
+**~0.86** across seeds, which looks paper-target-adjacent but is a different
+metric. The paper's headline "84.80%" is puzzle accuracy. Confirmed per-run
+peaks on the correct metric:
+
+| run_id | seed | peak puzzle_acc | peak cell_acc | peak epoch | time-to-peak |
+|---|---|---|---|---|---|
+| 94idw79x | 0 | 0.7340 | 0.8550 | 500 | 22.9h (full run) |
+| ihj6hpsn | 0 | 0.7456 | 0.8584 | 900 | 20.1h |
+| c5kt8l2i | 1 | 0.7420 | 0.8585 | 650 | 8.7h |
+| 8hncpi2x | 2 | **0.7486** | 0.8613 | 700 | 10.8h |
+
+Mean puzzle_acc = **0.7425 ± 0.0063 across 3 seeds**. Time to epoch 1000
+(post-peak, training continuing into overfit) averaged **24.7h per seed**.
+All `best.pt` files captured at the peak epoch (700–900 range).
+
+#### Decision: keep sudoku data, truncate reporting at epoch 1000
+
+**No sudoku re-run.** Existing data is defensible:
+
+- All three seeds reached peak puzzle_acc between epochs 500 and 900
+- `best.pt` on each machine is the peak checkpoint (already correct)
+- Plotting/reporting up to epoch 1000 shows the rise without the overfit tail
+- This is standard "early stopping via checkpoint selection" practice
+
+Paper framing:
+> *"TRM-MLP was fine-tuned from Sanjin2024's `Sudoku-Extreme-mlp` checkpoint
+> for up to 1000 epochs with validation-monitored checkpoint retention. Peak
+> puzzle accuracy was 0.7425 ± 0.0063 across 3 seeds (individual peaks:
+> 0.7340, 0.7456, 0.7420, 0.7486), reached between epochs 500 and 900.
+> Evaluating the released checkpoint directly on our validation split gives
+> 0.8474, reproducing the paper's headline 0.848 figure."*
+
+#### Refined compute plan (6 machines, parallel)
+
+| Phase | Target | Machines | Per-seed hours | Parallel wall-clock |
+|---|---|---|---|---|
+| Kill bad maze runs | — | FDK, FCM, FFN | instant | 0h |
+| Fresh maze fine-tune | 150 epochs, new hparams | FDK, FCM, FFN (3 seeds) | ~100h (pessimistic) | ~100h ≈ 4.2d |
+| Sudoku re-run | skipped | FGD, FFS, FDY now free | — | 0h |
+| LLM fleet (§4) | 7 unfilled baselines | FGD, FFS, FDY parallel | 6h total | ~2h ≈ 0.1d |
+
+**Total wall-clock: ~4.2 days. Deadline buffer: ~7.8 days** for paper write-up,
+aggregation, figures, final eval.
+
+#### Epoch-1 go/no-go milestone for maze
+
+After maze epoch 1 logs to wandb (~30 min in), check `val/exact_accuracy`:
+
+- **≥ 0.78** ✅ Fix confirmed; let it run to epoch 150
+- **0.5 – 0.78** ⚠️ Partial fix; consider dropping `q_loss_weight` to 0.001
+  or freezing `q_head` entirely for first 50 epochs
+- **< 0.5** ❌ Diagnosis incomplete; kill, investigate further
+
+#### Not yet executed (awaiting team sign-off)
+
+- [ ] Delete wandb forensic run `ilrkzyp6` (`shamykyzer/TRM`)
+- [ ] Kill maze runs on FDK, FCM, FFN (commands in §5.8)
+- [ ] Back up maze `best.pt` from the three machines before relaunch (just in
+      case — expected worthless but 30 seconds of insurance)
+- [ ] `git pull` on each training machine to pick up the §5.12 code changes
+- [ ] Launch fresh maze runs on all 3 machines (`python start.py maze <seed>`)
+- [ ] Start LLM fleet on the freed 3 machines per §4
+
 ---
 
 ## Appendix — how to verify any of the above

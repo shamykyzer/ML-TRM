@@ -116,6 +116,11 @@ class TrainingConfig(BaseModel):
     task_emb_lr: float = 0.01
     task_emb_weight_decay: float = 0.1
 
+    # ACT loss weighting (applied to q_halt_loss + q_continue_loss)
+    # Paper uses 0.5 (from-scratch). Drop to 0.01 when fine-tuning from a
+    # pretrained checkpoint to prevent Q-loss hijacking the backbone.
+    q_loss_weight: float = 0.5
+
     # Task ID for collate
     task_id: int = 0  # 0=sudoku, 1=maze
 

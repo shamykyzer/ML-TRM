@@ -171,7 +171,7 @@ def _run_train_once(config: ExperimentConfig, resume: str = "", init_weights: st
             "mlp_t": config.model.mlp_t,
         }
         model = TRMOfficial(model_config)
-        loss_head = ACTLossHead(model)
+        loss_head = ACTLossHead(model, q_loss_weight=config.training.q_loss_weight)
         print(f"TRM-Official params: {model.param_count():,}")
 
         collate_fn = official_collate_fn(config.training.task_id)

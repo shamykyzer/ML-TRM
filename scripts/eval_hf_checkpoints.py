@@ -97,7 +97,13 @@ def _run_eval_one(target: HFEvalTarget) -> dict:
 
     if config.data.dataset == "maze":
         from src.data.maze_dataset import MazeDataset
-        test_ds = MazeDataset(config.data.data_dir, "test")
+        # Respect config.data.mask_non_path instead of the MazeDataset default (True).
+        # The default masks non-path cells in both CE loss and the grading metric,
+        # which enables a reward-hacking attractor documented in maze_dataset.py:39-50
+        # (constant-`o` predictor scores 100% without solving any maze). Passing the
+        # config value keeps HF-eval consistent with whatever setting the user's
+        # training uses — critical for apples-to-apples comparison in the paper.
+        test_ds = MazeDataset(config.data.data_dir, "test", mask_non_path=config.data.mask_non_path)
     else:
         from src.data.sudoku_dataset import SudokuDataset
         test_ds = SudokuDataset(config.data.data_dir, "test")

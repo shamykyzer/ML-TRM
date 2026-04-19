@@ -67,9 +67,15 @@ class ACTLossHead(nn.Module):
     Returns (new_carry, total_loss, metrics_dict, detached_outputs, all_halted).
     """
 
-    def __init__(self, model: nn.Module):
+    def __init__(self, model: nn.Module, q_loss_weight: float = 0.5):
         super().__init__()
         self.model = model
+        # Weight applied to (q_halt_loss + q_continue_loss) in the combined loss.
+        # Paper uses 0.5 (tuned for from-scratch training). For fine-tuning from a
+        # pretrained checkpoint where LM loss starts near-converged but Q-head is
+        # miscalibrated, drop this to ~0.01 so Q-loss doesn't hijack the backbone
+        # via shared-recurrence gradient. See findings.md §5.9–5.10.
+        self.q_loss_weight = q_loss_weight
 
     def initial_carry(self, *args: Any, **kwargs: Any) -> Any:
         return self.model.initial_carry(*args, **kwargs)
@@ -135,7 +141,7 @@ class ACTLossHead(nn.Module):
             )
             metrics["q_continue_loss"] = q_continue_loss.detach()
 
-        total_loss = lm_loss + 0.5 * (q_halt_loss + q_continue_loss)
+        total_loss = lm_loss + self.q_loss_weight * (q_halt_loss + q_continue_loss)
 
         detached_outputs = {k: outputs[k].detach() for k in return_keys if k in outputs}
 
