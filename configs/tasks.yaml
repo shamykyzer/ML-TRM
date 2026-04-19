@@ -1,0 +1,106 @@
+# Task registry for the ML-TRM dashboard / menu subcommands.
+#
+# ⚠️ This file is metadata-only. The runtime authority for every pre-existing
+# invocation (bare `python start.py`, `python start.py status`, the direct-
+# launch path `python start.py <task> <seed>`, and the interactive menu) is
+# the TASK_DISPATCH dict in src/cli/bootstrap.py — keep that in sync if you
+# add or rename a task here. A unit test (tests/test_tasks_yaml.py) fails
+# CI if the two drift.
+#
+# sudoku-mlp (mlp_t=true, paper 84.80%) and sudoku-att (mlp_t=false,
+# paper 77.70%) are deliberately two separate entries. Never collapse them.
+#
+# Path placeholders of the form ${HF_REMAPPED_*} are resolved at load time
+# by src.cli.tasks.load_tasks() against the constants in src.cli.paths.
+
+version: 1
+
+families:
+  trm:
+    label: "Recursive reasoner (paper architecture)"
+  llm:
+    label: "Fine-tuned LLM baseline (LoRA)"
+
+tasks:
+  - id: sudoku-mlp
+    family: trm
+    label: "Sudoku-Extreme MLP-t (paper 84.80%)"
+    config: configs/trm_official_sudoku_mlp.yaml
+    init_weights: ${HF_REMAPPED_SUDOKU_MLP}
+    mlp_t: true
+    paper_target: 0.848
+    approx_minutes: 4800
+
+  - id: sudoku-att
+    family: trm
+    label: "Sudoku-Extreme attention (paper 77.70%)"
+    config: configs/trm_official_sudoku.yaml
+    init_weights: ${HF_REMAPPED_SUDOKU_ATT}
+    mlp_t: false
+    paper_target: 0.777
+    approx_minutes: 1000
+
+  - id: maze
+    family: trm
+    label: "Maze-Hard 30x30 (paper 85.30%)"
+    config: configs/trm_official_maze.yaml
+    init_weights: ${HF_REMAPPED_MAZE}
+    mlp_t: false
+    paper_target: 0.853
+    approx_minutes: 300
+
+  - id: llm-gpt2-sudoku
+    family: llm
+    label: "GPT-2 (124M) LoRA on Sudoku"
+    config: configs/llm_config.yaml
+    init_weights: ""
+    approx_minutes: 20
+
+  - id: llm-smollm-sudoku
+    family: llm
+    label: "SmolLM2-360M LoRA on Sudoku"
+    config: configs/llm_smollm.yaml
+    init_weights: ""
+    approx_minutes: 25
+
+  - id: llm-qwen-sudoku
+    family: llm
+    label: "Qwen2.5-0.5B LoRA on Sudoku"
+    config: configs/llm_qwen.yaml
+    init_weights: ""
+    approx_minutes: 20
+
+  - id: llm-llama-sudoku
+    family: llm
+    label: "Llama-3.2-1B LoRA on Sudoku"
+    config: configs/llm_llama.yaml
+    init_weights: ""
+    approx_minutes: 30
+
+  - id: llm-gpt2-maze
+    family: llm
+    label: "GPT-2 (124M) LoRA on Maze"
+    config: configs/llm_gpt2_maze.yaml
+    init_weights: ""
+    approx_minutes: 30
+
+  - id: llm-smollm-maze
+    family: llm
+    label: "SmolLM2-360M LoRA on Maze"
+    config: configs/llm_smollm_maze.yaml
+    init_weights: ""
+    approx_minutes: 45
+
+  - id: llm-qwen-maze
+    family: llm
+    label: "Qwen2.5-0.5B LoRA on Maze"
+    config: configs/llm_qwen_maze.yaml
+    init_weights: ""
+    approx_minutes: 60
+
+  - id: llm-llama-maze
+    family: llm
+    label: "Llama-3.2-1B LoRA on Maze"
+    config: configs/llm_llama_maze.yaml
+    init_weights: ""
+    approx_minutes: 90
