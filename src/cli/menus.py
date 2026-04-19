@@ -225,13 +225,14 @@ LLM_FAMILIES: List[Tuple[str, str, str, str]] = [
 
 
 def _prompt_fresh_target_and_seed() -> Tuple[str, List[str], int]:
-    """Show TRM tasks + 4 LLM families; return (label, [task, ...], seed).
+    """Show TRM tasks + 4 LLM families + an all-families option; return (label, [task, ...], seed).
 
     TRM picks return a single-element task list; LLM family picks return
-    [sudoku_task, maze_task] so the caller can wipe + run both back-to-back
-    with one prompt instead of forcing the user through option 6 twice per
-    family. Keeps the menu at 7 entries (3 TRM + 4 LLM families) instead of
-    the 11 entries the per-task picker would show.
+    [sudoku_task, maze_task]; the all-families pick returns all 8 LLM task
+    keys in ascending-model-size order (gpt2 -> smollm -> qwen -> llama),
+    each family still interleaved sudoku-then-maze so wandb runs cluster
+    sensibly. Caller wipes + runs them all back-to-back via the same loop
+    the 2-task family case uses; a crash mid-sweep doesn't abort the rest.
     """
     from src.cli.bootstrap import TASK_DISPATCH
 
@@ -247,14 +248,35 @@ def _prompt_fresh_target_and_seed() -> Tuple[str, List[str], int]:
     for family, desc, sudoku_task, maze_task in LLM_FAMILIES:
         entries.append((family, f"{desc}  (sudoku \u2192 maze)", [sudoku_task, maze_task]))
 
+    # Flatten every family's (sudoku, maze) into a single 8-task sweep.
+    # Order follows LLM_FAMILIES ascending by base-model size so the
+    # scaling-comparison narrative reads left-to-right. Fits in ~10h on
+    # an RTX 5070 at 30 epochs per task (proposal-committed cadence).
+    all_llm_tasks: List[str] = []
+    for _family, _desc, sudoku_task, maze_task in LLM_FAMILIES:
+        all_llm_tasks.extend([sudoku_task, maze_task])
+    entries.append((
+        "llm-all",
+        f"All {len(LLM_FAMILIES)} LLM families back-to-back "
+        f"({len(all_llm_tasks)} runs, sudoku \u2192 maze per family)",
+        all_llm_tasks,
+    ))
+
     print(f"\n{BOLD}Which target?{RESET}")
     print(f"  {DIM}-- TRM (paper architectures) --{RESET}")
     n_trm = len(trm_tasks)
     for i, (label, desc, _) in enumerate(entries[:n_trm], 1):
         print(f"  {CYAN}{i:>2}{RESET}) {label:<13s}  {DIM}{desc}{RESET}")
     print(f"  {DIM}-- LLM families (each runs sudoku then maze) --{RESET}")
-    for i, (label, desc, _) in enumerate(entries[n_trm:], n_trm + 1):
+    # Show individual families first, then the all-families sweep last
+    # (so the menu numbering puts the bigger option at the bottom where
+    # the eye naturally scans for "run everything").
+    for i, (label, desc, _) in enumerate(entries[n_trm:-1], n_trm + 1):
         print(f"  {CYAN}{i:>2}{RESET}) {label:<13s}  {DIM}{desc}{RESET}")
+    print(f"  {DIM}-- Sweep --{RESET}")
+    all_idx = len(entries)
+    all_label, all_desc, _ = entries[-1]
+    print(f"  {CYAN}{all_idx:>2}{RESET}) {all_label:<13s}  {DIM}{all_desc}{RESET}")
 
     choice = _prompt(f"Pick 1-{len(entries)}", default="1")
     try:
@@ -374,11 +396,19 @@ def _fresh_start_launcher() -> None:
         return  # unreachable — _dispatch_training calls sys.exit
 
     bar = "=" * 64
+    run_kind = "LLM fleet sweep" if len(tasks) > 2 else "LLM family run"
     print(f"\n{BOLD}{bar}{RESET}")
-    print(f"  {BOLD}LLM family run \u2014 {label}{RESET}")
+    print(f"  {BOLD}{run_kind} \u2014 {label}{RESET}")
     print(f"  seed   : {CYAN}{seed}{RESET}")
     print(f"  epochs : {CYAN}{epochs}{RESET} per task")
-    print(f"  order  : {DIM}{' \u2192 '.join(tasks)}{RESET}")
+    # For short sweeps the arrow chain is readable inline; for the full
+    # 8-task sweep it wraps past terminal width, so print one task per line.
+    if len(tasks) > 4:
+        print(f"  order  :")
+        for i, t in enumerate(tasks, 1):
+            print(f"    {DIM}{i:>2}. {t}{RESET}")
+    else:
+        print(f"  order  : {DIM}{' \u2192 '.join(tasks)}{RESET}")
     print(f"{BOLD}{bar}{RESET}\n")
 
     results: List[Tuple[str, int]] = []
