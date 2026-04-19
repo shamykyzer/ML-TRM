@@ -167,10 +167,15 @@ class LLMTrainer:
                     # Primary names + symmetric aliases matching trainer_official:
                     # val/accuracy mirrors train/accuracy (cell-level),
                     # val/exact_accuracy mirrors train/exact_accuracy (puzzle-level).
+                    # lm/loss and val/lm_loss are explicit semantic names for the
+                    # LM cross-entropy — same scalars as train/loss, val/loss;
+                    # duplicate keys so existing dashboards keep working.
                     wandb.log(
                         {
                             "train/loss": metrics["loss"],
+                            "lm/loss": metrics["loss"],
                             "val/loss": val_metrics["loss"],
+                            "val/lm_loss": val_metrics["loss"],
                             "val/puzzle_acc": val_metrics["puzzle_acc"],
                             "val/cell_acc": val_metrics["cell_acc"],
                             "val/accuracy": val_metrics["cell_acc"],
