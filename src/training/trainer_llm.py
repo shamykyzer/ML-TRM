@@ -109,6 +109,38 @@ class LLMTrainer:
         stopped_early = False
         last_epoch = self.tc.epochs - 1
 
+        # Pre-training eval at step 0, before any gradient update. Anchors the
+        # plateau plot: if val metrics at step 0 ≈ step N, the model never moved.
+        # Without this baseline, the first data point is at step=log_interval
+        # (e.g. 10) and reviewers can ask "how do we know it didn't briefly
+        # learn and then stall?" — this answers that definitively.
+        val_metrics_initial = self.evaluate()
+        tqdm.write(
+            f"[baseline] Epoch 0/{self.tc.epochs} | "
+            f"ValLoss: {val_metrics_initial['loss']:.4f} | "
+            f"Puzzle: {val_metrics_initial['puzzle_acc']:.4f} | "
+            f"Cell: {val_metrics_initial['cell_acc']:.4f}"
+        )
+        self._append_log([
+            0, "",  # no train_loss at epoch 0 — no gradient steps taken yet
+            f"{val_metrics_initial['loss']:.4f}",
+            f"{val_metrics_initial['puzzle_acc']:.4f}",
+            f"{val_metrics_initial['cell_acc']:.4f}",
+            "0.0",
+        ])
+        if self.use_wandb:
+            wandb.log(
+                {
+                    "val/loss": val_metrics_initial["loss"],
+                    "val/lm_loss": val_metrics_initial["loss"],
+                    "val/puzzle_acc": val_metrics_initial["puzzle_acc"],
+                    "val/cell_acc": val_metrics_initial["cell_acc"],
+                    "val/accuracy": val_metrics_initial["cell_acc"],
+                    "val/exact_accuracy": val_metrics_initial["puzzle_acc"],
+                },
+                step=0,
+            )
+
         for epoch in range(self.tc.epochs):
             metrics = self._train_epoch(epoch)
 
