@@ -141,12 +141,30 @@ def parse_train_log(path: str) -> dict | None:
     max_elapsed = 0.0
     steps_sum = 0.0
     steps_count = 0
+    # Non-learning diagnostics — require epoch-0 baseline row from the
+    # LLM trainer's pre-training evaluation hook. Blank when absent.
+    initial_val_loss: float | None = None
+    final_val_loss: float | None = None
 
     for row in rows:
         epoch = _to_int(row.get("epoch"))
         if epoch is None:
             continue
         elapsed = _to_float(row.get("elapsed_min"))
+
+        # Capture val_loss at epoch 0 (baseline) and epoch == max (final) for
+        # the loss_delta_pct diagnostic. LLM trainer writes val_loss in column
+        # 3; official/legacy TRM logs don't have this column, so the `.get`
+        # returns None and both trackers stay blank — which is correct.
+        vl = _to_float(row.get("val_loss"))
+        if epoch == 0 and vl is not None:
+            initial_val_loss = vl
+        if vl is not None and epoch >= max_epoch:
+            # max_epoch is updated further down in the loop; for out-of-order
+            # rows the final pass overrides earlier captures. Using >= (not ==)
+            # lets the first row seen at the new max-epoch win even before
+            # max_epoch state has been updated.
+            final_val_loss = vl
 
         # best_val_* — ignore missing/empty entries (don't treat as zero).
         # Track peak epoch + elapsed time so overfitting runs don't misreport.
@@ -181,6 +199,20 @@ def parse_train_log(path: str) -> dict | None:
     if max_epoch < 0:
         return None
 
+    if (
+        initial_val_loss is not None
+        and final_val_loss is not None
+        and initial_val_loss > 0
+    ):
+        loss_delta_pct: float | str = (
+            (initial_val_loss - final_val_loss) / initial_val_loss * 100.0
+        )
+    else:
+        # Blank cell for runs without the epoch-0 baseline row (TRM runs,
+        # pre-diagnostics LLM runs). Matches the ``attach_efficiency_metrics``
+        # blank-cell convention for zero-correct runs.
+        loss_delta_pct = ""
+
     return {
         "best_val_puzzle_acc": best_val_puzzle,
         "best_val_cell_acc": best_val_cell,
@@ -190,6 +222,9 @@ def parse_train_log(path: str) -> dict | None:
         "final_epoch": max_epoch,
         "train_time_min": max_elapsed,
         "avg_act_steps": (steps_sum / steps_count) if steps_count else 0.0,
+        "initial_val_loss": initial_val_loss if initial_val_loss is not None else "",
+        "final_val_loss": final_val_loss if final_val_loss is not None else "",
+        "loss_delta_pct": loss_delta_pct,
     }
 
 

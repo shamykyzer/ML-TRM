@@ -42,6 +42,29 @@ OUT_OF_ORDER_TRAIN_LOG = """epoch,lm_loss,q_halt_loss,q_continue_loss,accuracy,e
 30,14.7,0.99,0.0,0.84,0.22,0.89,13.6,,,0.0,47.9
 """
 
+# LLM trainer CSV schema (trainer_llm.py) — columns differ from the
+# official/legacy TRM schemas above. Used for the non-learning diagnostic
+# tests added with loss_delta_pct support.
+LLM_TRAIN_LOG_WITH_BASELINE = """epoch,loss,val_loss,val_puzzle_acc,val_cell_acc,elapsed_min
+0,,2.5000,0.0000,0.1900,0.0
+10,2.4800,2.4900,0.0000,0.1895,15.3
+20,2.4700,2.4700,0.0000,0.1896,30.5
+30,2.4600,2.4500,0.0000,0.1905,45.8
+"""
+
+LLM_TRAIN_LOG_WITHOUT_BASELINE = """epoch,loss,val_loss,val_puzzle_acc,val_cell_acc,elapsed_min
+10,2.4800,2.4900,0.0000,0.1895,15.3
+20,2.4700,2.4700,0.0000,0.1896,30.5
+30,2.4600,2.4500,0.0000,0.1905,45.8
+"""
+
+LLM_TRAIN_LOG_NEGATIVE_DELTA = """epoch,loss,val_loss,val_puzzle_acc,val_cell_acc,elapsed_min
+0,,2.0000,0.0000,0.1900,0.0
+10,2.1000,2.1000,0.0000,0.1895,15.3
+20,2.1500,2.1500,0.0000,0.1896,30.5
+30,2.2000,2.2000,0.0000,0.1905,45.8
+"""
+
 EMISSIONS_SINGLE_RUN = """timestamp,project_name,run_id,experiment_id,duration,emissions,emissions_rate,cpu_power,gpu_power,ram_power,cpu_energy,gpu_energy,ram_energy,energy_consumed
 2026-04-11T07:53:48,trm_train,RUN_A,EXP_1,50.55,0.00067,1.3e-05,7.5,175.6,20.0,0.0001,0.0024,0.00027,0.00283
 2026-04-11T07:54:35,trm_train,RUN_A,EXP_1,98.30,0.00137,1.4e-05,7.1,185.1,20.0,0.00019,0.00505,0.00052,0.00576
@@ -225,6 +248,58 @@ def test_write_summary_csv_creates_valid_csv():
         assert float(out[0]["best_val_puzzle_acc"]) == 0.85
     finally:
         os.unlink(path)
+
+
+# ---------------------------------------------------------------------------
+# loss_delta_pct — non-learning diagnostic column (LLM trainer only)
+# ---------------------------------------------------------------------------
+
+def test_loss_delta_pct_computed_when_epoch_zero_row_present(tmp_path):
+    """A train log containing an epoch=0 baseline row yields a numeric
+    loss_delta_pct = (initial - final) / initial * 100."""
+    log_path = tmp_path / "test_train_log.csv"
+    log_path.write_text(LLM_TRAIN_LOG_WITH_BASELINE)
+
+    result = parse_train_log(str(log_path))
+
+    assert result is not None
+    assert result["initial_val_loss"] == 2.5
+    assert result["final_val_loss"] == 2.45
+    # (2.5 - 2.45) / 2.5 * 100 = 2.0
+    assert abs(result["loss_delta_pct"] - 2.0) < 1e-6
+
+
+def test_loss_delta_pct_blank_when_no_epoch_zero_row(tmp_path):
+    """A train log without an epoch=0 baseline row yields loss_delta_pct=""
+    and both initial/final val_loss fields blank — matches pre-diagnostics
+    LLM runs and all TRM runs."""
+    log_path = tmp_path / "test_train_log.csv"
+    log_path.write_text(LLM_TRAIN_LOG_WITHOUT_BASELINE)
+
+    result = parse_train_log(str(log_path))
+
+    assert result is not None
+    assert result["initial_val_loss"] == ""
+    # final_val_loss IS populated (the epoch=30 row has val_loss=2.45)
+    # but loss_delta_pct is blank because initial is missing.
+    assert result["final_val_loss"] == 2.45
+    assert result["loss_delta_pct"] == ""
+
+
+def test_loss_delta_pct_negative_when_val_loss_increased(tmp_path):
+    """val_loss getting WORSE over training yields a negative delta —
+    valid semantics, not a bug. The plateau figure can distinguish
+    'flat' (delta ≈ 0) from 'degraded' (delta < 0)."""
+    log_path = tmp_path / "test_train_log.csv"
+    log_path.write_text(LLM_TRAIN_LOG_NEGATIVE_DELTA)
+
+    result = parse_train_log(str(log_path))
+
+    assert result is not None
+    assert result["initial_val_loss"] == 2.0
+    assert result["final_val_loss"] == 2.2
+    # (2.0 - 2.2) / 2.0 * 100 = -10.0
+    assert abs(result["loss_delta_pct"] - (-10.0)) < 1e-6
 
 
 # ---------------------------------------------------------------------------

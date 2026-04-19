@@ -1,35 +1,26 @@
-# DeepSeek-R1-Distill-Qwen-1.5B fine-tune on Sudoku-Extreme.
-#
-# Baseline #5 in the comparison fleet (follow-up work — NOT in the May 1
-# coursework submission; see findings.md §7 for the decision rationale).
-# Added post-deadline to test whether reasoning-specialized pretraining
-# overcomes TRM's architectural advantage on structured-reasoning tasks.
-#
-# Architecture: DeepSeek's R1-Distill-Qwen-1.5B inherits Qwen2's attention
-# module naming (q_proj, k_proj, v_proj), so the existing BaselineLLM LoRA
-# wiring handles it without changes. License: Apache-2.0 (Qwen-derived).
 model:
   model_type: llm_finetune
-  vocab_size: 11          # sudoku charset (0-9 digits + pad)
-  seq_len: 81             # 9x9 grid flattened
+  vocab_size: 11
+  seq_len: 81
   num_classes: 11
   llm_name: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
   lora_r: 8
   lora_alpha: 16
-  use_qlora: true         # 1.5B params — fits on 12GB via 4-bit quantization
-  use_gradient_checkpointing: true
+  use_qlora: false                  # 1.5B fp16 + seq=81 fits 12GB easily
 
 training:
   lr: 0.00005
   betas: [0.9, 0.999]
   weight_decay: 0.01
   warmup_steps: 500
-  batch_size: 8           # conservative for 1.5B on 12GB with qlora
-  grad_accum_steps: 2     # effective batch 16
+  batch_size: 8                     # 3x Qwen-0.5B params, halved batch to fit
+  grad_accum_steps: 2               # effective batch 16 (fleet parity)
   epochs: 30
+  early_stop_patience: 0            # disabled: plateau IS the result
+  log_per_step: true                # emit lm/step_loss for plateau figure
   use_wandb: true
   wandb_project: TRM-LLM
-  wandb_entity: ""        # set via TRM_WANDB_ENTITY in .env
+  wandb_entity: ""                  # set via TRM_WANDB_ENTITY in .env
   log_interval: 10
   save_interval: 50
 
