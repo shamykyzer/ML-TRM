@@ -269,6 +269,23 @@ def test_loss_delta_pct_computed_when_epoch_zero_row_present(tmp_path):
     assert abs(result["loss_delta_pct"] - 2.0) < 1e-6
 
 
+def test_loss_delta_pct_blank_when_no_epoch_zero_row(tmp_path):
+    """A train log without an epoch=0 baseline row yields loss_delta_pct=""
+    and both initial/final val_loss fields blank — matches pre-diagnostics
+    LLM runs and all TRM runs."""
+    log_path = tmp_path / "test_train_log.csv"
+    log_path.write_text(LLM_TRAIN_LOG_WITHOUT_BASELINE)
+
+    result = parse_train_log(str(log_path))
+
+    assert result is not None
+    assert result["initial_val_loss"] == ""
+    # final_val_loss IS populated (the epoch=30 row has val_loss=2.45)
+    # but loss_delta_pct is blank because initial is missing.
+    assert result["final_val_loss"] == 2.45
+    assert result["loss_delta_pct"] == ""
+
+
 # ---------------------------------------------------------------------------
 # Stdlib runner
 # ---------------------------------------------------------------------------
