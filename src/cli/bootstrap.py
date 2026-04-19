@@ -31,16 +31,10 @@ from src.cli.paths import (
     HF_REMAPPED_SUDOKU_MLP, HF_REMAPPED_SUDOKU_ATT, HF_REMAPPED_MAZE,
 )
 
-# Force UTF-8 on stdout/stderr so the unicode glyphs we print (✓, ▕, ▏, etc)
-# don't crash with UnicodeEncodeError on the default Windows cp1252 console.
-# Python 3.7+ supports `reconfigure()`; older streams (StringIO in tests,
-# certain subprocess setups) are silently skipped via the try/except.
-for _stream in (sys.stdout, sys.stderr):
-    if hasattr(_stream, "reconfigure"):
-        try:
-            _stream.reconfigure(encoding="utf-8", errors="backslashreplace")
-        except Exception:
-            pass
+# ANSI colors + stdout reconfigure moved to src/cli/console.py. Importing
+# console runs reconfigure_stdout() at import time (same side-effect timing
+# as before), so the unicode glyphs below print correctly on Windows cp1252.
+from src.cli.console import CYAN, GREEN, YELLOW, DIM, BOLD, RESET  # noqa: F401,E402
 
 # The six-seed fleet plan: machine index (1..6) -> (task, seed).
 # Machines 1-3 run sudoku-att seeds 0-2; machines 4-6 run maze seeds 3-5.
@@ -159,13 +153,9 @@ TASK_DISPATCH = {
 }
 
 
-# ANSI color codes (best-effort; Windows terminals >= Win10 support these)
-CYAN = "\033[96m"
-GREEN = "\033[92m"
-YELLOW = "\033[93m"
-DIM = "\033[2m"
-BOLD = "\033[1m"
-RESET = "\033[0m"
+# ANSI color constants now live in src/cli/console.py (imported at the
+# top of this file). Kept this marker so the section ordering in this
+# module mirrors the original start.py layout for git-blame continuity.
 
 
 def _run(cmd: List[str], cwd: str = None) -> None:
