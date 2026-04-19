@@ -302,25 +302,8 @@ from src.cli.wandb_bootstrap import (  # noqa: E402
 )
 
 
-def _setup_transfer() -> None:
-    """Remap the HF reference checkpoint and verify it loads cleanly.
-
-    Idempotent: always regenerates the remapped file when this stage fires,
-    on the theory that if we got here something was either missing or broken,
-    and rebuilding from source is cheaper than trying to diagnose which.
-    Both sub-scripts are streamed so the user sees the full transfer report
-    and the pass/fail verdict inline — that's the whole point of automating
-    this (no more eyeballing trainer startup logs to catch a silent breakage).
-    """
-    if not os.path.exists(HF_SOURCE_CKPT):
-        # User isn't doing transfer learning — nothing to do.
-        print(f"{DIM}No source checkpoint at {HF_SOURCE_CKPT} — skipping.{RESET}")
-        return
-    print(f"{CYAN}Remapping HF reference checkpoint → local TRMOfficial shape...{RESET}")
-    _run([PYTHON, REMAP_SCRIPT])
-    print(f"\n{CYAN}Verifying remapped checkpoint loads into a fresh TRMOfficial...{RESET}")
-    _run([PYTHON, VERIFY_SCRIPT])
-    print(f"\n{GREEN}✓ Transfer-learning init weights verified and ready.{RESET}")
+# _setup_transfer() moved to src/cli/transfer.py.
+from src.cli.transfer import _setup_transfer  # noqa: E402,F401
 
 
 def _bootstrap_data() -> None:
