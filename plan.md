@@ -6,6 +6,46 @@
 
 ---
 
+## Windows bootstrap handoff (2026-04-19 — paused; resume when ready)
+
+Separate stream from the coursework work below. A session designed a one-liner Windows setup (`irm | iex`) so new machines can reach "ready to train ML-TRM" without SSH-key setup. The design and plan are committed; the L1 script is written, reviewed, and committed locally; no pushes have happened.
+
+**Where to find everything:**
+- Design spec: `docs/superpowers/specs/2026-04-19-windows-bootstrap-setup-design.md`
+- Implementation plan: `docs/superpowers/plans/2026-04-19-windows-bootstrap-setup.md`
+- Feature branch (for ML-TRM changes): `feat/windows-bootstrap` (currently 0 commits on this branch beyond main — Dispatches B & C not yet run)
+- New sibling repo (local only): `C:/Users/amm-alshamy/OneDrive - UWE Bristol/Documents/ml-machine-setup/` — 4 commits, no remote yet.
+
+**State of each task (plan task numbers):**
+- Tasks 1–3 (Dispatch A) — **DONE locally.** `ml-machine-setup/` has `.gitignore`, `setup.ps1` (160 lines, syntax-checked, 5 code-review fixes applied), `README.md`. Commits: `5cca4cf` scaffold → `9135ee4` setup.ps1 → `6e31ddd` README → `29a7754` robustness fixes.
+- Task 4 (user gate) — **paused here.** Next action below.
+- Tasks 5–7 (Dispatch B & C) — not started. Will run once Task 4 is complete so `setup.ps1` can reference the live raw URL confidently.
+- Task 8 (make ML-TRM public + push) — not started.
+- Task 9 (Windows Sandbox verification) — not started.
+
+**To resume — exact next action:**
+
+1. Create the public GitHub repo (web UI, since `gh` CLI is not yet installed):
+   - Visit <https://github.com/new>
+   - Owner: `shamykyzer`, Name: `ml-machine-setup`, Visibility: **Public**
+   - Do NOT add README / .gitignore / license (already have them locally).
+2. From a terminal:
+   ```bash
+   cd "C:/Users/amm-alshamy/OneDrive - UWE Bristol/Documents/ml-machine-setup"
+   git remote add origin https://github.com/shamykyzer/ml-machine-setup.git
+   git branch -M main
+   git push -u origin main
+   ```
+3. Verify: `curl -sI https://raw.githubusercontent.com/shamykyzer/ml-machine-setup/main/setup.ps1 | head -1` should return `HTTP/2 200`.
+4. Open a new Claude Code session, point it at this file + the plan, and say "continue bootstrap at Dispatch B". It will write ML-TRM's `bootstrap.ps1`, untrack the `papers/*.pdf`, update the README, and stop at the next user gate.
+
+**Absolute rules in force** (from user memory):
+- No push to any remote without user literally saying "push".
+- No destructive actions (no `git reset --hard`, no `branch -D`, no `worktree remove`).
+- Commits on `feat/windows-bootstrap` branch only for ML-TRM changes — `main` stays untouched until the user merges.
+
+---
+
 ## Session Handoff (read this first)
 
 A Claude Code session just finished auditing the project against a 7-section coursework checklist and started executing the fixes. Training of `trm_official_sudoku` is **live** (epoch ≥ 1 of 500) — do **not** touch any file used by the running process.
