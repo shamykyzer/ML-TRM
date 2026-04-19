@@ -42,7 +42,47 @@ from src.utils.seed import set_seed
 
 CONFIG_PATH = "configs/trm_official_maze.yaml"
 INIT_WEIGHTS = "hf_checkpoints/Maze-Hard/remapped_for_local.pt"
-OUT_DIR = "results/forensic"
+
+
+def _resolve_forensic_out_dir() -> str:
+    """Pick a non-OneDrive output directory for the snap_*.pt tensors.
+
+    Forensic snapshots are ~27 MB each. Writing them into the repo's
+    results/ directory would bloat the user's OneDrive quota (the repo is
+    typically cloned inside OneDrive for multi-device sync). Priority:
+      1. $TRM_FORENSIC_OUT_DIR if explicitly set
+      2. $TRM_WORK_DIR / forensic (follows the same convention as training)
+      3. C:/ml-trm-work/forensic on Windows
+      4. ~/ml-trm-work/forensic elsewhere
+      5. results/forensic as last-resort fallback (works everywhere)
+    The chosen dir is created eagerly; the run.log stays in the repo's
+    results/forensic/ so the small text trail remains discoverable without
+    needing to know where the binary tensors landed.
+    """
+    explicit = os.environ.get("TRM_FORENSIC_OUT_DIR")
+    if explicit:
+        out = explicit
+    else:
+        work = os.environ.get("TRM_WORK_DIR")
+        if work:
+            out = os.path.join(work, "forensic")
+        elif os.name == "nt":
+            out = os.path.join("C:/", "ml-trm-work", "forensic")
+        elif os.path.expanduser("~"):
+            out = os.path.join(os.path.expanduser("~"), "ml-trm-work", "forensic")
+        else:
+            out = "results/forensic"
+    if "onedrive" in out.lower():
+        # Never silently fall back into OneDrive — that defeats the whole
+        # point of this picker. Force the repo-local fallback and shout.
+        print(f"[forensic] WARNING: candidate out dir looks OneDrive-ish: {out}")
+        print(f"[forensic] falling back to results/forensic (legacy behaviour)")
+        out = "results/forensic"
+    os.makedirs(out, exist_ok=True)
+    return out
+
+
+OUT_DIR = _resolve_forensic_out_dir()
 
 
 def _build_model(config):
@@ -110,6 +150,8 @@ def main() -> int:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[env] device={device} forward_dtype={config.model.forward_dtype}")
+    print(f"[env] snap_*.pt output dir: {os.path.abspath(OUT_DIR)}")
+    print(f"[env]   (override via TRM_FORENSIC_OUT_DIR or TRM_WORK_DIR)")
 
     model = _build_model(config)
     loss_head = ACTLossHead(model)
@@ -133,8 +175,9 @@ def main() -> int:
         print(f"  MISSING: {k}")
 
     snap_0 = _named_state_dict_snapshot(model)
-    torch.save(snap_0, os.path.join(OUT_DIR, "snap_0_after_load.pt"))
-    print(f"[snap] snap_0_after_load.pt saved")
+    snap_0_path = os.path.join(OUT_DIR, "snap_0_after_load.pt")
+    torch.save(snap_0, snap_0_path)
+    print(f"[snap] snap_0_after_load.pt saved -> {snap_0_path}")
 
     # --- STEP 2: baseline eval at snap_0 ---
     eval_0 = _eval(model, val_loader, config, "snap_0")
@@ -199,8 +242,9 @@ def main() -> int:
 
     # --- STEP 4: snapshot after step ---
     snap_1 = _named_state_dict_snapshot(model)
-    torch.save(snap_1, os.path.join(OUT_DIR, "snap_1_after_one_step.pt"))
-    print(f"[snap] snap_1_after_one_step.pt saved")
+    snap_1_path = os.path.join(OUT_DIR, "snap_1_after_one_step.pt")
+    torch.save(snap_1, snap_1_path)
+    print(f"[snap] snap_1_after_one_step.pt saved -> {snap_1_path}")
 
     # --- STEP 5: eval at snap_1 ---
     eval_1 = _eval(model, val_loader, config, "snap_1")
