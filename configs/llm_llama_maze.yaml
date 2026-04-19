@@ -15,7 +15,7 @@ training:
   warmup_steps: 500
   batch_size: 1           # 1.2B params x 900 tokens — tight on 12GB
   grad_accum_steps: 16    # effective batch 16
-  epochs: 100
+  epochs: 30
   use_wandb: true
   wandb_project: TRM-LLM
   wandb_entity: ""

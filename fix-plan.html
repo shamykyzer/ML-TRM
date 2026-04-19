@@ -1,0 +1,822 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ML-TRM — Revised Fix Plan (LLM OOM + val_acc=0)</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --surface: #1a2028;
+    --surface-2: #232b36;
+    --border: #2f3a46;
+    --text: #e3e7ea;
+    --text-dim: #a0a9b3;
+    --text-muted: #6b7684;
+    --accent: #4da3ff;
+    --green: #6dd787;
+    --yellow: #f0c674;
+    --red: #e77576;
+    --purple: #c093e9;
+    --code-bg: #0b0f14;
+    --code-fg: #d0d7de;
+    --quote-bg: #1c252f;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu, sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+  }
+
+  .page {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 40px 24px 80px;
+  }
+
+  /* Header */
+  header.hero {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 24px;
+    margin-bottom: 32px;
+  }
+  header.hero h1 {
+    font-size: 28px;
+    font-weight: 700;
+    margin: 0 0 8px;
+    letter-spacing: -0.01em;
+  }
+  header.hero .subtitle {
+    color: var(--text-dim);
+    font-size: 15px;
+    margin-bottom: 16px;
+  }
+  .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .meta-pill {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-size: 12px;
+    color: var(--text-dim);
+    font-family: "SF Mono", Monaco, Consolas, monospace;
+  }
+  .meta-pill strong { color: var(--text); }
+
+  /* Section headings */
+  h2.section {
+    font-size: 20px;
+    font-weight: 700;
+    margin: 40px 0 16px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  h2.section .counter {
+    display: inline-block;
+    color: var(--text-muted);
+    font-family: "SF Mono", Monaco, Consolas, monospace;
+    font-size: 14px;
+    margin-right: 10px;
+  }
+
+  h3 {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 20px 0 10px;
+    color: var(--text);
+  }
+
+  p { margin: 10px 0; }
+
+  /* TL;DR */
+  .tldr {
+    background: linear-gradient(135deg, rgba(77,163,255,0.08), rgba(109,215,135,0.06));
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 6px;
+    padding: 18px 22px;
+    margin-bottom: 32px;
+  }
+  .tldr h2 {
+    margin: 0 0 10px;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+  }
+  .tldr ul { margin: 6px 0 0; padding-left: 18px; }
+  .tldr li { margin-bottom: 6px; }
+
+  /* Quote blocks from docs */
+  blockquote.doc-quote {
+    background: var(--quote-bg);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--purple);
+    margin: 12px 0;
+    padding: 12px 16px;
+    font-style: italic;
+    color: var(--text-dim);
+    border-radius: 0 4px 4px 0;
+  }
+  blockquote.doc-quote .source {
+    display: block;
+    font-style: normal;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 6px;
+    font-family: "SF Mono", Monaco, Consolas, monospace;
+  }
+
+  /* Code */
+  code {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-family: "SF Mono", Monaco, Consolas, monospace;
+    font-size: 13px;
+    border: 1px solid var(--border);
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    margin: 12px 0;
+  }
+  pre code {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  .tok-kw { color: #e77576; }
+  .tok-str { color: #6dd787; }
+  .tok-num { color: #f0c674; }
+  .tok-comment { color: var(--text-muted); font-style: italic; }
+  .tok-fn { color: #4da3ff; }
+  .tok-var { color: #c093e9; }
+
+  /* Fix cards */
+  .fix-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 22px 26px;
+    margin: 20px 0;
+    position: relative;
+  }
+  .fix-card .tag-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+  }
+  .tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-family: "SF Mono", Monaco, Consolas, monospace;
+  }
+  .tag-confirmed { background: rgba(109,215,135,0.15); color: var(--green); border: 1px solid rgba(109,215,135,0.3); }
+  .tag-new { background: rgba(240,198,116,0.15); color: var(--yellow); border: 1px solid rgba(240,198,116,0.3); }
+  .tag-expanded { background: rgba(192,147,233,0.15); color: var(--purple); border: 1px solid rgba(192,147,233,0.3); }
+  .tag-critical { background: rgba(231,117,118,0.15); color: var(--red); border: 1px solid rgba(231,117,118,0.3); }
+  .tag-info { background: rgba(77,163,255,0.15); color: var(--accent); border: 1px solid rgba(77,163,255,0.3); }
+
+  .fix-card h3 {
+    margin-top: 0;
+    font-size: 18px;
+  }
+  .fix-card .why {
+    background: rgba(77,163,255,0.05);
+    border-left: 2px solid var(--accent);
+    padding: 10px 14px;
+    margin: 12px 0;
+    border-radius: 0 4px 4px 0;
+  }
+  .fix-card .why strong { color: var(--accent); }
+
+  /* Decision matrix */
+  .decision-matrix {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 14px 0;
+    font-size: 14px;
+  }
+  .decision-matrix th, .decision-matrix td {
+    border: 1px solid var(--border);
+    padding: 10px 12px;
+    text-align: left;
+    vertical-align: top;
+  }
+  .decision-matrix th {
+    background: var(--surface-2);
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-dim);
+  }
+  .decision-matrix tr.chosen td {
+    background: rgba(109,215,135,0.06);
+  }
+  .decision-matrix tr.chosen td:first-child { color: var(--green); font-weight: 600; }
+
+  /* File diff table */
+  .diff-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 14px 0;
+    font-size: 13px;
+  }
+  .diff-table th, .diff-table td {
+    border: 1px solid var(--border);
+    padding: 9px 12px;
+    text-align: left;
+  }
+  .diff-table th {
+    background: var(--surface-2);
+    color: var(--text-dim);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .diff-table code { font-size: 12px; }
+  .diff-lines-add { color: var(--green); font-weight: 600; }
+
+  /* Insight boxes */
+  .insight {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px 18px;
+    margin: 14px 0;
+    font-size: 14px;
+  }
+  .insight .insight-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: var(--yellow);
+    text-transform: uppercase;
+    margin-bottom: 8px;
+    display: block;
+  }
+  .insight ul { margin: 4px 0; padding-left: 18px; }
+  .insight li { margin-bottom: 6px; }
+
+  /* Questions */
+  .question-list {
+    counter-reset: q;
+    list-style: none;
+    padding: 0;
+  }
+  .question-list li {
+    counter-increment: q;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 4px 4px 0;
+    padding: 12px 16px 12px 50px;
+    margin-bottom: 10px;
+    position: relative;
+  }
+  .question-list li::before {
+    content: counter(q);
+    position: absolute;
+    left: 14px;
+    top: 12px;
+    background: var(--accent);
+    color: var(--bg);
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    text-align: center;
+    line-height: 24px;
+    font-weight: 700;
+    font-size: 13px;
+  }
+  .question-list .suggested {
+    display: block;
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--text-muted);
+    font-family: "SF Mono", Monaco, Consolas, monospace;
+  }
+
+  /* Flow / call-outs */
+  .flow {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+    font-family: "SF Mono", Monaco, Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.7;
+    margin: 12px 0;
+  }
+  .flow .step {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    margin-bottom: 4px;
+  }
+  .flow .step-num {
+    color: var(--accent);
+    font-weight: 700;
+    flex-shrink: 0;
+    width: 28px;
+  }
+  .flow .arrow { color: var(--text-muted); margin: 0 8px; }
+
+  /* Footer */
+  footer {
+    margin-top: 50px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+
+  /* Links & small */
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  small { color: var(--text-muted); font-size: 12px; }
+
+  /* Nice bullets */
+  ul.clean {
+    padding-left: 20px;
+  }
+  ul.clean li {
+    margin-bottom: 8px;
+  }
+
+  /* Two-column layout for specific sections */
+  .side-by-side {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin: 14px 0;
+  }
+  .side-box {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 14px;
+  }
+  .side-box h4 {
+    margin: 0 0 8px;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-dim);
+    font-weight: 600;
+  }
+  .side-box.bad h4 { color: var(--red); }
+  .side-box.good h4 { color: var(--green); }
+
+  @media (max-width: 720px) {
+    .side-by-side { grid-template-columns: 1fr; }
+    .page { padding: 20px 14px; }
+    header.hero h1 { font-size: 22px; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="hero">
+  <h1>Revised Fix Plan — LLM Training Pipeline</h1>
+  <div class="subtitle">Debug root-cause analysis grounded in the project proposal, assessment spec, and <code>plan.md</code>. No code edited yet — awaiting sign-off.</div>
+  <div class="meta-row">
+    <span class="meta-pill"><strong>Module:</strong> UFCFAS-15-2 Machine Learning</span>
+    <span class="meta-pill"><strong>Deadline:</strong> 1 May 2026, 17:00 BST</span>
+    <span class="meta-pill"><strong>Repo:</strong> ML-TRM @ main</span>
+    <span class="meta-pill"><strong>Status:</strong> diagnosis complete, fixes pending</span>
+  </div>
+</header>
+
+<section class="tldr">
+  <h2>Executive summary</h2>
+  <ul>
+    <li><strong>Two bugs block the LLM pipeline:</strong> (1) GPU auto-tuner silently overrides the YAML <code>batch_size</code>, causing maze-OOM. (2) Eval has an off-by-one shift vs what the causal-LM was trained against, so <code>val/puzzle_acc</code> is stuck at 0 regardless of model quality.</li>
+    <li><strong>Fix A — OOM:</strong> skip <code>apply_gpu_overrides</code> for LLM model types. Its batch tables were designed for the 7M-param TRM, not 500M-param LLMs.</li>
+    <li><strong>Fix B — eval shift:</strong> shift <code>preds</code> and <code>labels</code> by one position in the eval loop; also add <code>cell_accuracy</code> (which <code>plan.md</code> expects for the report and is more informative when puzzle_acc is near zero).</li>
+    <li><strong>Fix C — epoch budget:</strong> drop LLM configs from 50–100 epochs to 30. The thesis only needs "LLMs score ~0%"; long training doesn't change that and costs 40+ hours of fleet time.</li>
+    <li><strong>Fix D — re-evaluate existing Qwen sudoku checkpoint</strong> after Fix B before spending another 400 min training. Sanity-check the metric before committing time.</li>
+  </ul>
+</section>
+
+<h2 class="section"><span class="counter">01</span>What the project docs actually commit us to</h2>
+
+<p>Before choosing fixes, I re-read the proposal, spec, and <code>plan.md</code> to check whether my original fix plan was over- or under-scoped. It was under-scoped.</p>
+
+<h3>From the Project Proposal (§5 Evaluation)</h3>
+<blockquote class="doc-quote">
+  Performance will be measured by <strong>puzzle accuracy</strong> (percentage of fully correct solutions) on Sudoku-Extreme and Maze-Hard across all three models. Environmental metrics, energy consumption (kWh), CO2-equivalent emissions, and wall-clock training time will be recorded using CodeCarbon.
+  <span class="source">docs/Project Proposal.pdf, §5</span>
+</blockquote>
+
+<h3>From the Project Proposal (§1 Application Problem)</h3>
+<blockquote class="doc-quote">
+  DeepSeek R1 (671B parameters), Claude 3.7, and o3-mini-high all score 0% on Sudoku-Extreme (Jolicoeur-Martineau, 2025).
+  <span class="source">docs/Project Proposal.pdf, §1</span>
+</blockquote>
+<p><strong>Implication:</strong> the "LLMs score 0%" finding is the <em>literature claim we replicate</em>. That puts pressure on our measurement to be correct — we can't cite 0% if the eval is broken, because 0-from-bug is not a measurement.</p>
+
+<h3>From the Assessment Spec (Experimental Evaluation 30%, 70–100% band)</h3>
+<blockquote class="doc-quote">
+  Excellent generation and clear analysis of experimental results using fully justified methodology, excellent appraisal and evaluation of results.
+  <span class="source">docs/Group Project Specification 2025-26-v4.pdf, p.9</span>
+</blockquote>
+
+<h3>From <code>plan.md</code></h3>
+<ul class="clean">
+  <li><strong>Line 509:</strong> <em>"All LLMs expected to score ~0%. That's the point."</em> — but this only works as a thesis if the zero is real, not bug-induced.</li>
+  <li><strong>Line 194:</strong> <code>results/summary.csv</code> schema expects both <code>eval_puzzle_acc</code> AND <code>eval_cell_acc</code>. The LLM trainer only reports puzzle_acc.</li>
+  <li><strong>Line 546:</strong> Report deliverable table lists Cell Accuracy as a required experimental metric.</li>
+</ul>
+
+<h3>From <code>docs/training-notes.md</code> + design doc</h3>
+<blockquote class="doc-quote">
+  Batch sizes are auto-detected at runtime via <code>gpu_config.py</code>. Maze uses self-attention (O(L²) memory) so it needs much smaller batches than sudoku (MLP-Mixer).
+  <span class="source">docs/training-notes.md, line 88</span>
+</blockquote>
+<p>Both the notes and the design doc's "Kept Infrastructure" section describe <code>apply_gpu_overrides</code> as TRM-scoped (MLP-Mixer vs self-attention profiles for ~7M models). Never intended for 500M LLMs with their own YAML-tuned batch/accum pairs.</p>
+
+<h2 class="section"><span class="counter">02</span>Fix A — OOM on maze (gpu_config override)</h2>
+
+<div class="fix-card">
+  <div class="tag-row">
+    <span class="tag tag-confirmed">Confirmed</span>
+    <span class="tag tag-info">variant (a) chosen</span>
+    <span class="tag tag-info">2-line change</span>
+  </div>
+  <h3>Root cause</h3>
+  <p><code>main.py:56</code> calls <code>apply_gpu_overrides(config)</code> for <strong>every</strong> run. Inside <code>src/utils/gpu_config.py:104–116</code>:</p>
+<pre><code><span class="tok-kw">def</span> <span class="tok-fn">apply_gpu_overrides</span>(config: ExperimentConfig) -> <span class="tok-kw">None</span>:
+    gpu_profile = detect_gpu()
+    task = config.data.dataset <span class="tok-kw">if</span> hasattr(config.data, <span class="tok-str">"dataset"</span>) <span class="tok-kw">else</span> <span class="tok-str">"sudoku"</span>
+    task_profile = gpu_profile.get(task, gpu_profile.get(<span class="tok-str">"sudoku"</span>, {}))
+    <span class="tok-kw">if</span> <span class="tok-str">"batch_size"</span> <span class="tok-kw">in</span> task_profile:
+        config.training.batch_size = task_profile[<span class="tok-str">"batch_size"</span>]  <span class="tok-comment"># unconditional overwrite</span></code></pre>
+  <p>The RTX 5070 profile's <code>"maze": {"batch_size": 16}</code> was tuned for TRM (~7M params). Your Qwen-maze YAML explicitly sets <code>batch_size: 2, grad_accum_steps: 8</code> — but the override silently clobbers <code>batch_size=2</code> to <code>batch_size=16</code>.</p>
+
+  <div class="side-by-side">
+    <div class="side-box good">
+      <h4>YAML intent</h4>
+<pre><code>batch_size: <span class="tok-num">2</span>          <span class="tok-comment"># per-step fits 11.9 GB</span>
+grad_accum_steps: <span class="tok-num">8</span>   <span class="tok-comment"># effective batch 16</span></code></pre>
+    </div>
+    <div class="side-box bad">
+      <h4>Actual (after override)</h4>
+<pre><code>batch_size: <span class="tok-num">16</span>         <span class="tok-comment"># 8× VRAM, lm_head 4.3 GB alone</span>
+grad_accum_steps: <span class="tok-num">8</span>   <span class="tok-comment"># effective batch 128 — unintended</span></code></pre>
+    </div>
+  </div>
+
+  <h3>Variant chosen: <code>(a)</code> gate override on model_type</h3>
+  <table class="decision-matrix">
+    <thead>
+      <tr>
+        <th>Variant</th>
+        <th>Change</th>
+        <th>Pros</th>
+        <th>Cons</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr class="chosen">
+        <td>(a)</td>
+        <td>Early-return from <code>apply_gpu_overrides</code> when <code>model_type &in; {LLM_FINETUNE, LLM_DISTILL}</code></td>
+        <td>2-line change; restores function to designed scope; YAML stays authoritative for LLMs</td>
+        <td>None meaningful</td>
+      </tr>
+      <tr>
+        <td>(b)</td>
+        <td>Add <code>llm_sudoku</code>/<code>llm_maze</code> keys to every GPU profile</td>
+        <td>Centralises batch tuning</td>
+        <td>Second source of truth alongside YAML → drift; higher maintenance</td>
+      </tr>
+      <tr>
+        <td>(c)</td>
+        <td>Honor YAML when "explicitly set" via sentinel</td>
+        <td>Most general</td>
+        <td>Invasive schema change; needs to propagate through config loader</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="why">
+    <strong>Why (a):</strong> The design doc explicitly lists <code>apply_gpu_overrides</code> under "Kept Infrastructure" for <code>trainer_official.py</code>. It was never positioned as a universal auto-tuner — <code>main.py</code> just calls it for every code path out of historical convenience. Gating restores the function to its designed scope without touching TRM behaviour.
+  </div>
+
+  <div class="insight">
+    <span class="insight-label">★ Insight</span>
+    <ul>
+      <li>Each LLM YAML has hand-tuned <code>batch_size × grad_accum_steps</code> pairs specific to that model's parameter count and sequence length. Llama uses <code>8 × 2</code>, Qwen-maze uses <code>2 × 8</code>, GPT-2 uses <code>32 × 1</code>. A shared GPU table can't capture this — the tradeoffs are model-specific, not GPU-specific.</li>
+      <li>The running <code>trm_official_sudoku</code> training uses <code>TRM_OFFICIAL_SUDOKU</code> model type — variant (a) does not touch its code path, so editing <code>gpu_config.py</code> is safe while that run is live.</li>
+    </ul>
+  </div>
+</div>
+
+<h2 class="section"><span class="counter">03</span>Fix B — eval off-by-one + missing cell_accuracy</h2>
+
+<div class="fix-card">
+  <div class="tag-row">
+    <span class="tag tag-expanded">Expanded scope</span>
+    <span class="tag tag-critical">Blocks thesis</span>
+    <span class="tag tag-info">~10-line change</span>
+  </div>
+  <h3>Root cause — causal-LM shift mismatch</h3>
+
+  <p>HuggingFace <code>Qwen2ForCausalLM.forward(input_ids, labels=…)</code> shifts internally during loss:</p>
+<pre><code>shift_logits = logits[..., :-<span class="tok-num">1</span>, :]   <span class="tok-comment"># positions 0..T-2</span>
+shift_labels = labels[..., <span class="tok-num">1</span>:]       <span class="tok-comment"># positions 1..T-1</span>
+loss = CrossEntropyLoss()(shift_logits, shift_labels)</code></pre>
+
+  <p><strong>So training teaches:</strong> <code>logits[i]</code> predicts <code>labels[i+1]</code>.</p>
+
+  <p>But eval in <code>trainer_llm.py:181–195</code> compares without shifting:</p>
+<pre><code>outputs = self.model(input_ids=inputs)
+preds = outputs.logits.argmax(-<span class="tok-num">1</span>)            <span class="tok-comment"># preds[i] = argmax logits[i]</span>
+mask = labels != <span class="tok-num">0</span>
+puzzle_correct = ((preds == labels) | ~mask).<span class="tok-fn">all</span>(dim=-<span class="tok-num">1</span>)
+<span class="tok-comment"># ^ compares preds[i] to labels[i] — off-by-one vs training</span></code></pre>
+
+  <p><strong>Consequence:</strong> <code>val/puzzle_acc</code> is stuck at 0 regardless of whether the model learned anything. The loss curve (2.31 → 1.95) shows training is working; the accuracy metric is just measuring the wrong thing.</p>
+
+  <h3>Expanded scope (based on plan.md)</h3>
+  <p>Original plan: fix the shift. <code>plan.md</code> review added two more items:</p>
+  <ul class="clean">
+    <li><strong>1. Shift preds and labels by one position</strong> so eval matches training.</li>
+    <li><strong>2. Add <code>cell_accuracy</code></strong> (per-token accuracy on positions where label ≠ 0). <code>trainer_trm.py</code> already reports this; the LLM trainer was missing it for no principled reason.</li>
+    <li><strong>3. Log both to W&amp;B</strong> under <code>val/puzzle_acc</code> and <code>val/cell_acc</code> — matches the panel structure <code>plan.md §A Task 6</code> established.</li>
+  </ul>
+
+  <h3>Proposed eval loop (after fix)</h3>
+<pre><code><span class="tok-kw">@torch.no_grad</span>()
+<span class="tok-kw">def</span> <span class="tok-fn">evaluate</span>(self) -> dict:
+    self.model.eval()
+    total_puzzles_correct = <span class="tok-num">0</span>
+    total_cells_correct = <span class="tok-num">0</span>
+    total_cells_graded = <span class="tok-num">0</span>
+    total_puzzles = <span class="tok-num">0</span>
+
+    <span class="tok-kw">for</span> inputs, labels <span class="tok-kw">in</span> self.val_loader:
+        inputs = inputs.<span class="tok-fn">to</span>(self.device)
+        labels = labels.<span class="tok-fn">to</span>(self.device)
+
+        outputs = self.model(input_ids=inputs)
+        preds = outputs.logits[:, :-<span class="tok-num">1</span>, :].<span class="tok-fn">argmax</span>(-<span class="tok-num">1</span>)   <span class="tok-comment"># shift preds</span>
+        labels_shifted = labels[:, <span class="tok-num">1</span>:]                    <span class="tok-comment"># shift labels</span>
+        mask = labels_shifted != <span class="tok-num">0</span>                         <span class="tok-comment"># True where graded</span>
+
+        puzzle_correct = ((preds == labels_shifted) | ~mask).<span class="tok-fn">all</span>(dim=-<span class="tok-num">1</span>)
+        total_puzzles_correct += puzzle_correct.<span class="tok-fn">sum</span>().<span class="tok-fn">item</span>()
+        total_cells_correct   += ((preds == labels_shifted) &amp; mask).<span class="tok-fn">sum</span>().<span class="tok-fn">item</span>()
+        total_cells_graded    += mask.<span class="tok-fn">sum</span>().<span class="tok-fn">item</span>()
+        total_puzzles         += inputs.shape[<span class="tok-num">0</span>]
+
+    <span class="tok-kw">return</span> {
+        <span class="tok-str">"puzzle_acc"</span>: total_puzzles_correct / <span class="tok-fn">max</span>(<span class="tok-num">1</span>, total_puzzles),
+        <span class="tok-str">"cell_acc"</span>:   total_cells_correct   / <span class="tok-fn">max</span>(<span class="tok-num">1</span>, total_cells_graded),
+    }</code></pre>
+
+  <div class="why">
+    <strong>Why cell_accuracy matters for the rubric:</strong> the Experimental Evaluation band (30%, 70-100%) requires "fully justified methodology, excellent appraisal and evaluation." Puzzle_acc stuck near zero across all LLMs is a single uninformative comparison. Cell_acc shows <em>how</em> the models fail — e.g., "GPT-2 reaches 22% per-cell accuracy (2× random baseline of 11%, one-of-9-digits) but can't string 40 correct digits together to solve a puzzle." That's real appraisal. The report needs it.
+  </div>
+
+  <div class="insight">
+    <span class="insight-label">★ Insight</span>
+    <ul>
+      <li>Loss 1.95 nats/token → perplexity ≈ 7. Over 11 valid classes, that means the model concentrates ~<sup>1</sup>&frasl;<sub>7</sub> probability mass on the correct digit. Translated through argmax, cell_acc should land in the 20-40% range after Fix B.</li>
+      <li>Puzzle accuracy scales brutally: if cell_acc on blanks is 30%, puzzle_acc = 0.30<sup>40</sup> ≈ 10<sup>-21</sup>. So even the fixed metric will report essentially zero puzzle_acc — which is exactly the thesis claim, now defensibly measured rather than bug-induced.</li>
+      <li>The existing <code>llm_qwen2_5_0_5b_sudoku_latest.pt</code> checkpoint was trained against the correct shifted loss — weights are good. Only the evaluation was broken. Re-evaluating that checkpoint with the fix requires no retraining.</li>
+    </ul>
+  </div>
+</div>
+
+<h2 class="section"><span class="counter">04</span>Fix C — LLM training budget (configs only)</h2>
+
+<div class="fix-card">
+  <div class="tag-row">
+    <span class="tag tag-new">New, surfaced from plan.md</span>
+    <span class="tag tag-info">config-only, no code change</span>
+  </div>
+
+  <h3>The mismatch</h3>
+  <p><code>plan.md</code> Phase 1 table (lines 501–507) estimated <strong>30–90 minutes per LLM run</strong>. Your Qwen-sudoku at 100 epochs took <strong>408 minutes</strong>.</p>
+
+  <div class="flow">
+    <div class="step"><span class="step-num">Plan →</span> 4 LLMs × (sudoku + maze) × ~45 min = ~6 hrs total fleet time</div>
+    <div class="step"><span class="step-num">Reality →</span> 4 LLMs × 2 tasks × ~408 min = ~54 hrs total fleet time</div>
+    <div class="step"><span class="step-num">Deadline →</span> 1 May 2026. Current fleet pace eats ~10% of remaining time on baselines alone.</div>
+  </div>
+
+  <h3>Diagnosis of the loss curve</h3>
+  <p>From your run log:</p>
+  <table class="diff-table">
+    <thead><tr><th>Epoch</th><th>Loss</th><th>Δ</th></tr></thead>
+    <tbody>
+      <tr><td>10</td><td>2.3138</td><td>—</td></tr>
+      <tr><td>20</td><td>2.1768</td><td>-0.137</td></tr>
+      <tr><td>30</td><td>2.1252</td><td>-0.052</td></tr>
+      <tr><td>50</td><td>2.0735</td><td>-0.052</td></tr>
+      <tr><td>70</td><td>2.0051</td><td>-0.068</td></tr>
+      <tr><td>100</td><td>1.9507</td><td>-0.054</td></tr>
+    </tbody>
+  </table>
+  <p>First 30 epochs → loss drop 0.19. Next 70 epochs → loss drop 0.17. Clearly saturating. Epochs 30-100 bought almost nothing.</p>
+
+  <div class="why">
+    <strong>Why 30 epochs is enough for the thesis:</strong> the proposal's argument is "LLMs can't structurally solve these puzzles, no matter how much we train them." 30 epochs demonstrates that ceiling just as cleanly as 100 and frees up 250+ min per LLM run for the TRM runs that actually need the compute.
+  </div>
+
+  <h3>Proposed config changes</h3>
+  <table class="diff-table">
+    <thead><tr><th>Config file</th><th>epochs before</th><th>epochs after</th></tr></thead>
+    <tbody>
+      <tr><td><code>configs/llm_qwen.yaml</code></td><td>50</td><td><span class="diff-lines-add">30</span></td></tr>
+      <tr><td><code>configs/llm_qwen_maze.yaml</code></td><td>100</td><td><span class="diff-lines-add">30</span></td></tr>
+      <tr><td><code>configs/llm_gpt2.yaml</code></td><td>(unchanged)</td><td><span class="diff-lines-add">30</span></td></tr>
+      <tr><td><code>configs/llm_gpt2_maze.yaml</code></td><td>(unchanged)</td><td><span class="diff-lines-add">30</span></td></tr>
+      <tr><td><code>configs/llm_smollm.yaml</code>, <code>_maze</code></td><td>(unchanged)</td><td><span class="diff-lines-add">30</span></td></tr>
+      <tr><td><code>configs/llm_llama.yaml</code>, <code>_maze</code></td><td>(unchanged)</td><td><span class="diff-lines-add">30</span></td></tr>
+    </tbody>
+  </table>
+  <p><small>Actual "before" values for configs I haven't read yet will be checked before editing.</small></p>
+</div>
+
+<h2 class="section"><span class="counter">05</span>Fix D — re-evaluate existing Qwen sudoku checkpoint</h2>
+
+<div class="fix-card">
+  <div class="tag-row">
+    <span class="tag tag-new">New</span>
+    <span class="tag tag-info">No retraining required</span>
+    <span class="tag tag-confirmed">Sanity check step</span>
+  </div>
+
+  <h3>What and why</h3>
+  <p>Before launching any more LLM training (which costs hours), validate Fix B on the existing checkpoint. The weights were trained against the correct shifted loss — they're good. Only the evaluation code was broken.</p>
+
+  <div class="flow">
+    <div class="step"><span class="step-num">1.</span>Apply Fix B to <code>trainer_llm.py</code></div>
+    <div class="step"><span class="step-num">2.</span>Load <code>C:/ml-trm-work/llm-qwen-sudoku-seed0/llm_qwen2_5_0_5b_sudoku_latest.pt</code></div>
+    <div class="step"><span class="step-num">3.</span>Run one eval pass on the sudoku test split</div>
+    <div class="step"><span class="step-num">4.</span>Report <code>val/puzzle_acc</code> and <code>val/cell_acc</code></div>
+  </div>
+
+  <h3>Expected outcomes</h3>
+  <table class="decision-matrix">
+    <thead>
+      <tr><th>Result</th><th>Interpretation</th><th>Next action</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>cell_acc &isin; [15%, 35%]</code></td>
+        <td>Fix B correct; model learned per-digit statistics; thesis holds</td>
+        <td>Proceed with fleet re-run at 30 epochs</td>
+      </tr>
+      <tr>
+        <td><code>cell_acc &gt; 35%</code></td>
+        <td>Model stronger than expected; nice result for the report</td>
+        <td>Proceed; may want to extend training for contrast figure</td>
+      </tr>
+      <tr>
+        <td><code>cell_acc &asymp; 0</code></td>
+        <td>Deeper bug exists beyond the shift</td>
+        <td><strong>Stop.</strong> Don't train more LLMs until diagnosed</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="why">
+    <strong>This is the "failing test case before claiming fix" step from the systematic debugging skill.</strong> Phase 3 (Hypothesis and Testing) says: form one hypothesis, test minimally, verify before continuing. Re-evaluating the existing checkpoint is exactly that — the minimum possible test of whether the shift fix is the right theory.
+  </div>
+</div>
+
+<h2 class="section"><span class="counter">06</span>Full file change summary</h2>
+
+<table class="diff-table">
+  <thead>
+    <tr>
+      <th>File</th>
+      <th>Change</th>
+      <th>Lines</th>
+      <th>Fix</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>src/utils/gpu_config.py</code></td>
+      <td>Early-return when <code>config.model.model_type</code> is LLM</td>
+      <td><span class="diff-lines-add">+4</span></td>
+      <td>A</td>
+    </tr>
+    <tr>
+      <td><code>src/training/trainer_llm.py</code></td>
+      <td>Shift preds/labels; compute <code>cell_acc</code>; log both to W&amp;B</td>
+      <td><span class="diff-lines-add">+10, -3</span></td>
+      <td>B</td>
+    </tr>
+    <tr>
+      <td><code>configs/llm_qwen.yaml</code></td>
+      <td><code>epochs: 50 → 30</code></td>
+      <td>1</td>
+      <td>C</td>
+    </tr>
+    <tr>
+      <td><code>configs/llm_qwen_maze.yaml</code></td>
+      <td><code>epochs: 100 → 30</code></td>
+      <td>1</td>
+      <td>C</td>
+    </tr>
+    <tr>
+      <td><code>configs/llm_gpt2.yaml</code> + <code>_maze</code></td>
+      <td><code>epochs: → 30</code></td>
+      <td>2</td>
+      <td>C</td>
+    </tr>
+    <tr>
+      <td><code>configs/llm_smollm.yaml</code> + <code>_maze</code></td>
+      <td><code>epochs: → 30</code></td>
+      <td>2</td>
+      <td>C</td>
+    </tr>
+    <tr>
+      <td><code>configs/llm_llama.yaml</code> + <code>_maze</code></td>
+      <td><code>epochs: → 30</code></td>
+      <td>2</td>
+      <td>C</td>
+    </tr>
+    <tr>
+      <td><small>(new) transient eval script</small></td>
+      <td>One-off re-eval of existing Qwen sudoku checkpoint</td>
+      <td><span class="diff-lines-add">+~30</span></td>
+      <td>D</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Files explicitly NOT touched (per plan.md hard constraints)</h3>
+<ul class="clean">
+  <li><code>src/training/trainer_official.py</code> — active training loop</li>
+  <li><code>src/models/trm_official.py</code> — imported by running process</li>
+  <li><code>src/data/sudoku_dataset.py</code>, <code>maze_dataset.py</code> — code bodies (docstring-only edits were allowed per plan.md Task 8 but not needed here)</li>
+  <li><code>configs/trm_official_sudoku.yaml</code> — active config</li>
+  <li><code>C:/TRM checkpoints/sudoku-att/*.pt</code> — live checkpoints</li>
+  <li><code>experiments/sudoku-att/*</code> — live logs being appended</li>
+</ul>
+
+<h2 class="section"><span class="counter">07</span>Questions before editing</h2>
+
+<ol class="question-list">
+  <li>
+    <strong>Fix C (epoch reduction to 30) — agree?</strong>
+    <span class="suggested">Suggested: yes for remaining runs. Keep the existing 100-epoch Qwen-sudoku checkpoint as-is since it's already trained; only apply the budget cut to runs that haven't started.</span>
+  </li>
+  <li>
+    <strong>Fix D (re-eval existing checkpoint) — confirm?</strong>
+    <span class="suggested">Suggested: yes — saves 400 min of re-training risk and validates Fix B cheaply.</span>
+  </li>
+  <li>
+    <strong>Is any training currently running on this machine?</strong>
+    <span class="suggested">plan.md last showed trm_official_sudoku as live at epoch 1/500. If still running, Fix A and B don't touch its code path (it uses TRM_OFFICIAL_SUDOKU, not LLM_FINETUNE). Confirm anyway.</span>
+  </li>
+  <li>
+    <strong>Should Fix A's gate also include <code>LLM_DISTILL</code>?</strong>
+    <span class="suggested">Suggested: yes — the distilled-LLM run hasn't happened yet but will face the same issue. Better to gate both now while the change is fresh.</span>
+  </li>
+  <li>
+    <strong>Order of edits: one-at-a-time with verification between, or all five at once then test end-to-end?</strong>
+    <span class="suggested">Suggested: bundled edit + single end-to-end test on the Qwen sudoku re-eval (Fix D). Smaller diff commits preferred per systematic-debugging skill, but D is the natural verification so one test suffices.</span>
+  </li>
+</ol>
+
+<footer>
+  Generated by Claude Code · no code edits performed yet · all four fixes await explicit sign-off · <code>plan.md</code> "preserve work — no destructive actions" rule respected throughout.
+</footer>
+
+</div>
+</body>
+</html>

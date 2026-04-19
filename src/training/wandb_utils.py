@@ -232,11 +232,21 @@ def define_common_metrics(
         wandb.define_metric(f"{ns}/*", step_metric="epoch")
 
     default_summaries: dict[str, str] = {
+        # Accuracies — peak value across the run is the headline number.
         "val/*_acc": "max",
+        "val/accuracy": "max",         # alias of val/cell_acc (trainer_llm/distill)
+        "val/exact_accuracy": "max",   # alias of val/puzzle_acc (trainer_llm/distill)
+        "val/puzzle_acc": "max",       # explicit fallback in case glob rejected
+        "val/cell_acc": "max",         # explicit fallback
+        # Losses — lowest value reached is "best".
         "*/loss": "min",
+        "train/loss": "min",           # explicit fallback
+        "val/loss": "min",             # explicit fallback
+        # Cumulative counters / snapshots.
         "carbon/*": "last",
         "system/*": "max",
         "train/lr": "last",
+        "train/elapsed_min": "last",
         "*/_sec": "mean",
     }
     if summaries:

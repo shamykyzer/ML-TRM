@@ -85,7 +85,9 @@ class LLMTrainer:
 
     def _init_log(self) -> None:
         with open(self.log_path, "w", newline="") as f:
-            csv.writer(f).writerow(["epoch", "loss", "val_puzzle_acc", "elapsed_min"])
+            csv.writer(f).writerow(
+                ["epoch", "loss", "val_loss", "val_puzzle_acc", "val_cell_acc", "elapsed_min"]
+            )
 
     def _append_log(self, row: list) -> None:
         with open(self.log_path, "a", newline="") as f:
@@ -96,6 +98,17 @@ class LLMTrainer:
         self.carbon.start()
         t_start = time.time()
 
+        # Early stopping state: a non-zero patience arms it. `best` starts at the
+        # worst possible value for the chosen mode so the first eval always wins.
+        es_patience = int(self.tc.early_stop_patience or 0)
+        es_mode = self.tc.early_stop_mode
+        es_metric = self.tc.early_stop_metric
+        es_min_delta = float(self.tc.early_stop_min_delta)
+        best_value = float("-inf") if es_mode == "max" else float("inf")
+        best_epoch = 0
+        stopped_early = False
+        last_epoch = self.tc.epochs - 1
+
         for epoch in range(self.tc.epochs):
             metrics = self._train_epoch(epoch)
 
@@ -105,28 +118,64 @@ class LLMTrainer:
                 tqdm.write(
                     f"Epoch {epoch + 1}/{self.tc.epochs} | "
                     f"Loss: {metrics['loss']:.4f} | "
-                    f"Val Acc: {val_metrics['puzzle_acc']:.4f} | "
+                    f"ValLoss: {val_metrics['loss']:.4f} | "
+                    f"Puzzle: {val_metrics['puzzle_acc']:.4f} | "
+                    f"Cell: {val_metrics['cell_acc']:.4f} | "
                     f"Time: {elapsed:.0f}min"
                 )
                 self._append_log([
                     epoch + 1, f"{metrics['loss']:.4f}",
-                    f"{val_metrics['puzzle_acc']:.4f}", f"{elapsed:.1f}",
+                    f"{val_metrics['loss']:.4f}",
+                    f"{val_metrics['puzzle_acc']:.4f}",
+                    f"{val_metrics['cell_acc']:.4f}",
+                    f"{elapsed:.1f}",
                 ])
 
                 if self.use_wandb:
+                    # Primary names + symmetric aliases matching trainer_official:
+                    # val/accuracy mirrors train/accuracy (cell-level),
+                    # val/exact_accuracy mirrors train/exact_accuracy (puzzle-level).
                     wandb.log(
                         {
                             "train/loss": metrics["loss"],
+                            "val/loss": val_metrics["loss"],
                             "val/puzzle_acc": val_metrics["puzzle_acc"],
+                            "val/cell_acc": val_metrics["cell_acc"],
+                            "val/accuracy": val_metrics["cell_acc"],
+                            "val/exact_accuracy": val_metrics["puzzle_acc"],
                             "train/elapsed_min": elapsed,
                         },
                         step=epoch + 1,
                     )
 
+                if es_patience > 0:
+                    current = {
+                        "val_cell_acc": val_metrics["cell_acc"],
+                        "val_puzzle_acc": val_metrics["puzzle_acc"],
+                        "train_loss": metrics["loss"],
+                    }[es_metric]
+                    improved = (
+                        current > best_value + es_min_delta if es_mode == "max"
+                        else current < best_value - es_min_delta
+                    )
+                    if improved:
+                        best_value = current
+                        best_epoch = epoch + 1
+                    elif (epoch + 1) - best_epoch >= es_patience:
+                        tqdm.write(
+                            f"[early-stop] {es_metric} has not improved for "
+                            f"{(epoch + 1) - best_epoch} epochs "
+                            f"(best={best_value:.4f} at epoch {best_epoch}). "
+                            f"Halting at epoch {epoch + 1}/{self.tc.epochs}."
+                        )
+                        last_epoch = epoch
+                        stopped_early = True
+                        break
+
             if (epoch + 1) % self.tc.save_interval == 0:
                 self._save_checkpoint(epoch, f"{self.model_tag}_epoch_{epoch + 1}.pt")
 
-        self._save_checkpoint(self.tc.epochs - 1, f"{self.model_tag}_latest.pt")
+        self._save_checkpoint(last_epoch, f"{self.model_tag}_latest.pt")
         emissions = self.carbon.stop()
 
         if self.use_wandb:
@@ -175,24 +224,45 @@ class LLMTrainer:
     @torch.no_grad()
     def evaluate(self) -> dict:
         self.model.eval()
-        total_correct = 0
+        total_puzzles_correct = 0
+        total_cells_correct = 0
+        total_cells_graded = 0
         total_puzzles = 0
+        total_loss_sum = 0.0
+        total_loss_batches = 0
 
         for inputs, labels in self.val_loader:
             inputs = inputs.to(self.device)
             labels = labels.to(self.device)
 
-            outputs = self.model(input_ids=inputs)
-            preds = outputs.logits.argmax(-1)
+            # Pass labels so HF computes val cross-entropy internally with the
+            # correct shift + ignore_index=-100 mask. Mirrors the training loss
+            # computation so val_loss diverging from train_loss is a direct
+            # overfitting signal.
+            labels_for_loss = labels.masked_fill(labels == 0, HF_IGNORE_INDEX)
+            outputs = self.model(input_ids=inputs, labels=labels_for_loss)
+            total_loss_sum += outputs.loss.item()
+            total_loss_batches += 1
 
-            # mask: True at positions the model must predict (label != 0 ignore).
-            # A puzzle is solved when every must-predict position is correct.
-            mask = labels != 0
-            puzzle_correct = ((preds == labels) | ~mask).all(dim=-1)
-            total_correct += puzzle_correct.sum().item()
+            # Accuracy uses the same shift HF applied internally for the loss:
+            # logits[i] predicts labels[i+1], so compare preds[:-1] with labels[1:].
+            preds = outputs.logits[:, :-1, :].argmax(-1)
+            labels_shifted = labels[:, 1:]
+
+            mask = labels_shifted != 0
+            puzzle_correct = ((preds == labels_shifted) | ~mask).all(dim=-1)
+            cells_correct = ((preds == labels_shifted) & mask).sum().item()
+
+            total_puzzles_correct += puzzle_correct.sum().item()
+            total_cells_correct += cells_correct
+            total_cells_graded += mask.sum().item()
             total_puzzles += inputs.shape[0]
 
-        return {"puzzle_acc": total_correct / max(1, total_puzzles)}
+        return {
+            "loss": total_loss_sum / max(1, total_loss_batches),
+            "puzzle_acc": total_puzzles_correct / max(1, total_puzzles),
+            "cell_acc": total_cells_correct / max(1, total_cells_graded),
+        }
 
     def _save_checkpoint(self, epoch: int, filename: str) -> None:
         path = os.path.join(self.config.checkpoint_dir, filename)

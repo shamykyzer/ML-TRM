@@ -135,7 +135,9 @@ class DistillationTrainer:
 
     def _init_log(self) -> None:
         with open(self.log_path, "w", newline="") as f:
-            csv.writer(f).writerow(["epoch", "loss", "val_puzzle_acc", "elapsed_min"])
+            csv.writer(f).writerow(
+                ["epoch", "loss", "val_loss", "val_puzzle_acc", "val_cell_acc", "elapsed_min"]
+            )
 
     def _append_log(self, row: list) -> None:
         with open(self.log_path, "a", newline="") as f:
@@ -155,19 +157,30 @@ class DistillationTrainer:
                 tqdm.write(
                     f"Distill Epoch {epoch + 1}/{self.tc.epochs} | "
                     f"Loss: {metrics['loss']:.4f} | "
-                    f"Val Acc: {val_metrics['puzzle_acc']:.4f} | "
+                    f"ValLoss: {val_metrics['loss']:.4f} | "
+                    f"Puzzle: {val_metrics['puzzle_acc']:.4f} | "
+                    f"Cell: {val_metrics['cell_acc']:.4f} | "
                     f"Time: {elapsed:.0f}min"
                 )
                 self._append_log([
                     epoch + 1, f"{metrics['loss']:.4f}",
-                    f"{val_metrics['puzzle_acc']:.4f}", f"{elapsed:.1f}",
+                    f"{val_metrics['loss']:.4f}",
+                    f"{val_metrics['puzzle_acc']:.4f}",
+                    f"{val_metrics['cell_acc']:.4f}",
+                    f"{elapsed:.1f}",
                 ])
 
                 if self.use_wandb:
+                    # Primary names + symmetric aliases matching trainer_official:
+                    # val/accuracy = cell-level, val/exact_accuracy = puzzle-level.
                     wandb.log(
                         {
                             "train/loss": metrics["loss"],
+                            "val/loss": val_metrics["loss"],
                             "val/puzzle_acc": val_metrics["puzzle_acc"],
+                            "val/cell_acc": val_metrics["cell_acc"],
+                            "val/accuracy": val_metrics["cell_acc"],
+                            "val/exact_accuracy": val_metrics["puzzle_acc"],
                             "train/elapsed_min": elapsed,
                         },
                         step=epoch + 1,
@@ -211,6 +224,17 @@ class DistillationTrainer:
             if teacher_logits.size(-1) != v:
                 teacher_logits = teacher_logits[..., :v]
 
+            # Re-align prediction targets when the teacher is a HF causal LM:
+            # teacher_logits[i] predicts labels[i+1] (HF internal shift), while
+            # the student (plain encoder) predicts at position i directly. Drop
+            # the teacher's last position and the student's/labels' first
+            # position so all three are indexed by the same target position
+            # (1..T-1). Self-distillation (teacher=DistilledLLM) needs no shift.
+            if self.teacher_kind == "baseline_llm":
+                teacher_logits = teacher_logits[:, :-1, :].contiguous()
+                student_logits = student_logits[:, 1:, :].contiguous()
+                labels = labels[:, 1:].contiguous()
+
             loss = self.loss_fn(student_logits, teacher_logits, labels)
             loss.backward()
             self.optimizer.step()
@@ -225,8 +249,12 @@ class DistillationTrainer:
     @torch.no_grad()
     def evaluate(self) -> dict:
         self.student.eval()
-        total_correct = 0
+        total_puzzles_correct = 0
+        total_cells_correct = 0
+        total_cells_graded = 0
         total_puzzles = 0
+        total_loss_sum = 0.0
+        total_loss_batches = 0
 
         for inputs, labels in self.val_loader:
             inputs = inputs.to(self.device)
@@ -235,12 +263,30 @@ class DistillationTrainer:
             logits = self.student(inputs)
             preds = logits.argmax(-1)
 
+            # Val loss = hard-label CE only (no teacher call — keeps val fast).
+            # Overfitting shows as val_loss rising while train_loss keeps falling,
+            # same pattern regardless of whether distillation KL is included.
+            v = logits.size(-1)
+            val_ce = F.cross_entropy(
+                logits.reshape(-1, v), labels.reshape(-1), ignore_index=0
+            )
+            total_loss_sum += val_ce.item()
+            total_loss_batches += 1
+
             mask = labels != 0
             puzzle_correct = ((preds == labels) | ~mask).all(dim=-1)
-            total_correct += puzzle_correct.sum().item()
+            cells_correct = ((preds == labels) & mask).sum().item()
+
+            total_puzzles_correct += puzzle_correct.sum().item()
+            total_cells_correct += cells_correct
+            total_cells_graded += mask.sum().item()
             total_puzzles += inputs.shape[0]
 
-        return {"puzzle_acc": total_correct / max(1, total_puzzles)}
+        return {
+            "loss": total_loss_sum / max(1, total_loss_batches),
+            "puzzle_acc": total_puzzles_correct / max(1, total_puzzles),
+            "cell_acc": total_cells_correct / max(1, total_cells_graded),
+        }
 
     def _save_checkpoint(self, filename: str) -> None:
         path = os.path.join(self.config.checkpoint_dir, filename)

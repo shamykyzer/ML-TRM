@@ -1,3 +1,5 @@
-task,best_val_puzzle_acc,best_val_cell_acc,final_train_loss,final_epoch,train_time_min,avg_act_steps,train_duration_s,train_energy_kwh,train_co2_kg
-sudoku,0.0,0.1114,2.1975,250,3886.3,16.0,0.0,0.0,0.0
-sudoku-att,0.1833,0.5536,3.5912,500,976.4,7.664406779661017,115294.48928329977,6.927115317124801,1.6458064010803644
+task,best_val_puzzle_acc,best_val_cell_acc,peak_epoch,train_time_min_at_peak,final_train_loss,final_epoch,train_time_min,avg_act_steps,train_duration_s,train_energy_kwh,train_co2_kg,correct_puzzles,co2_per_correct_puzzle,kwh_per_correct_puzzle,eval_source
+sudoku,0.0,0.1114,250,0.0,2.1975,250,3886.3,16.0,0.0,0.0,0.0,0.0,,,
+sudoku-att,0.1833,0.5536,100,633.3,3.5912,500,976.4,7.664406779661017,115294.48928329977,6.927115317124801,1.6458064010803644,77535.9,2.1226379020303684e-05,8.934074818406443e-05,
+llm-qwen-sudoku-seed0,0.0,0.190657,100,0.0,1.9507,100,408.5,0.0,24511.050155799836,0.8959551539141053,0.2128690890632983,0.0,,,"scripts/eval_llm_checkpoint.py (Fix B shift-corrected eval, 50 batches = 800 puzzles from sudoku-extreme test split, 2026-04-19). Cross-validated against 187840-puzzle partial sample: 0.1913."
+sudoku-mlp-seed0,0.7456,0.8584,900,1089.6,0.0554,2245,4804.2,1.846255506607925,372412.11048240005,22.01828807988667,5.231303046612192,315388.8,1.6586838361451618e-05,6.981315785432669e-05,

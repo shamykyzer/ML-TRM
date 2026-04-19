@@ -119,6 +119,17 @@ class TrainingConfig(BaseModel):
     # Task ID for collate
     task_id: int = 0  # 0=sudoku, 1=maze
 
+    # Early stopping (LLMTrainer only): halt when the monitored metric has not
+    # improved for `early_stop_patience` epochs. Useful for LLM baselines that
+    # plateau well before the full epoch budget — e.g. cell_acc flatlines after
+    # ~50 epochs on a 500-epoch run. Disabled when patience=0.
+    # metric: "val_cell_acc" | "val_puzzle_acc" | "train_loss"
+    # mode:   "max" (higher is better) | "min" (lower is better)
+    early_stop_patience: int = 0
+    early_stop_metric: str = "val_cell_acc"
+    early_stop_mode: str = "max"
+    early_stop_min_delta: float = 1e-4
+
 
 class DataConfig(BaseModel):
     dataset: str = "sudoku"

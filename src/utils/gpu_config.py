@@ -2,7 +2,7 @@
 import platform
 import torch
 
-from src.utils.config import ExperimentConfig
+from src.utils.config import ExperimentConfig, ModelType
 
 
 # Optimal settings per GPU for TRM training.
@@ -103,6 +103,18 @@ def get_num_workers() -> int:
 
 def apply_gpu_overrides(config: ExperimentConfig) -> None:
     """Apply GPU-optimal batch_size and num_workers to an ExperimentConfig in-place."""
+    # LLM YAMLs hand-tune batch_size/grad_accum_steps per parameter count and
+    # sequence length; the GPU_PROFILES table is TRM-scoped (~7M params, MLP-Mixer
+    # vs self-attention envelope) and would silently clobber those values,
+    # OOM-ing 500M-param LLMs on maze.
+    if config.model.model_type in (ModelType.LLM_FINETUNE, ModelType.LLM_DISTILL):
+        config.data.num_workers = get_num_workers()
+        print(f"[GPU Config] LLM ({config.model.model_type.value}) — keeping YAML "
+              f"batch_size={config.training.batch_size}, "
+              f"grad_accum_steps={config.training.grad_accum_steps} "
+              f"(num_workers={config.data.num_workers})")
+        return
+
     gpu_profile = detect_gpu()
     task = config.data.dataset if hasattr(config.data, "dataset") else "sudoku"
     task_profile = gpu_profile.get(task, gpu_profile.get("sudoku", {}))

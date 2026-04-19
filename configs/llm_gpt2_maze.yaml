@@ -15,7 +15,7 @@ training:
   warmup_steps: 500
   batch_size: 4           # ~11x longer seq than sudoku -> /4 batch
   grad_accum_steps: 4     # effective batch 16
-  epochs: 100
+  epochs: 30
   use_wandb: true
   wandb_project: TRM-LLM
   wandb_entity: ""        # set via TRM_WANDB_ENTITY in .env

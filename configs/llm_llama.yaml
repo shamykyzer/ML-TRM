@@ -15,7 +15,7 @@ training:
   warmup_steps: 500
   batch_size: 8           # smaller batch -- 1.2B params uses more VRAM
   grad_accum_steps: 2     # effective batch stays 16
-  epochs: 100
+  epochs: 30
   use_wandb: true
   wandb_project: TRM-LLM
   wandb_entity: ""                    # set via TRM_WANDB_ENTITY in .env
