@@ -10,9 +10,9 @@ Runs three steps in order: git pull --ff-only, kill existing training
 for this config, back up best.pt. Bypasses stage checks and the
 interactive menu; assumes the machine has already been through setup.
 
-Kept stdlib-only so start.py can import this module before the venv is
-built. psutil is opportunistically imported inside _kill_training_processes
-with a wmic/taskkill/pgrep fallback for the common case.
+psutil is opportunistically imported inside _kill_training_processes
+with a wmic/taskkill/pgrep fallback for the common case where psutil is
+not yet installed.
 """
 import os
 import platform

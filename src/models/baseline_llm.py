@@ -43,15 +43,6 @@ class BaselineLLM(nn.Module):
                 base_model,
                 use_gradient_checkpointing=use_gradient_checkpointing,
             )
-        elif use_gradient_checkpointing:
-            # Non-QLoRA path: enable manually. enable_input_require_grads is
-            # required because the frozen base model's input embeddings don't
-            # require grad, which would break backprop through the checkpoint.
-            base_model.gradient_checkpointing_enable(
-                gradient_checkpointing_kwargs={"use_reentrant": False}
-            )
-            if hasattr(base_model, "enable_input_require_grads"):
-                base_model.enable_input_require_grads()
 
         # Determine target modules based on model architecture.
         # DeepSeek-R1-Distill-Qwen inherits Qwen's module names; -Llama variant
@@ -80,6 +71,20 @@ class BaselineLLM(nn.Module):
             target_modules=target_modules,
         )
         self.model = get_peft_model(base_model, peft_config)
+
+        # Non-QLoRA path: enable gradient checkpointing AFTER get_peft_model so
+        # PEFT's module-rewrapping can't silently reset the flag. The QLoRA path
+        # above already handled this via prepare_model_for_kbit_training.
+        # enable_input_require_grads is required because the frozen base model's
+        # input embeddings don't require grad, which would break backprop
+        # through the checkpoint boundary.
+        if use_gradient_checkpointing and not use_qlora:
+            self.model.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={"use_reentrant": False}
+            )
+            if hasattr(self.model, "enable_input_require_grads"):
+                self.model.enable_input_require_grads()
+
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
