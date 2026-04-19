@@ -105,7 +105,78 @@ TASK_DISPATCH = {
     "llm-smollm-maze":   ("configs/llm_smollm_maze.yaml",   "", "SmolLM2-360M LoRA on Maze"),
     "llm-qwen-maze":     ("configs/llm_qwen_maze.yaml",     "", "Qwen2.5-0.5B LoRA on Maze"),
     "llm-llama-maze":    ("configs/llm_llama_maze.yaml",    "", "Llama-3.2-1B LoRA on Maze"),
+    "llm-deepseek-sudoku": ("configs/llm_deepseek.yaml",      "", "DeepSeek-R1-Distill-Qwen-1.5B LoRA on Sudoku"),
+    "llm-deepseek-maze":   ("configs/llm_deepseek_maze.yaml", "", "DeepSeek-R1-Distill-Qwen-1.5B LoRA on Maze"),
 }
+
+
+# Per-rig LLM fleet assignments (Option B: model-family ownership).
+# Each rig runs its assigned LLM family/families in longest-first order
+# so the riskiest job (longest maze run) starts while the operator is
+# fresh and can catch early-epoch OOM. Total wall-clock per rig is
+# ~15-17 hr on RTX 5070 at 30 epochs. Qwen sudoku is intentionally
+# absent — that baseline already completed in an earlier session.
+#
+# rig 1 -> Llama owner         (17 hr)
+# rig 2 -> DeepSeek owner      (16 hr)
+# rig 3 -> Small-fleet owner   (17 hr — GPT-2, SmolLM, Qwen-maze)
+RIG_FLEET_PLAN: dict = {
+    1: ["llm-llama-maze", "llm-llama-sudoku"],
+    2: ["llm-deepseek-maze", "llm-deepseek-sudoku"],
+    3: [
+        "llm-qwen-maze",
+        "llm-smollm-maze",
+        "llm-gpt2-maze",
+        "llm-smollm-sudoku",
+        "llm-gpt2-sudoku",
+    ],
+}
+
+
+def _resolve_rig() -> int:
+    """Read TRM_RIG from env; prompt once if unset and persist to .env.
+
+    Returns 1, 2, or 3 — the machine's fleet-assignment key per
+    RIG_FLEET_PLAN. On first call (TRM_RIG unset) this prompts the
+    operator and appends a ``TRM_RIG=<n>`` line to ``.env`` so the
+    prompt fires at most once per machine. Exits with status 2 on
+    invalid input rather than guessing.
+    """
+    raw = os.environ.get("TRM_RIG", "").strip()
+    if raw:
+        try:
+            rig = int(raw)
+        except ValueError:
+            print(f"{YELLOW}!!! TRM_RIG='{raw}' is not an integer.{RESET}")
+            sys.exit(2)
+    else:
+        print(f"\n{BOLD}Which rig is this?{RESET}  {DIM}(1=Llama, 2=DeepSeek, 3=small-fleet){RESET}")
+        try:
+            reply = input(f"{CYAN}TRM_RIG [1-3]: {RESET}").strip()
+        except EOFError:
+            print(f"{YELLOW}!!! No input received.{RESET}")
+            sys.exit(2)
+        try:
+            rig = int(reply)
+        except ValueError:
+            print(f"{YELLOW}!!! Need an integer 1-3, got '{reply}'.{RESET}")
+            sys.exit(2)
+        # Persist so the prompt fires at most once per machine. Best-effort:
+        # don't fail the launch just because .env was read-only or absent.
+        env_path = os.path.join(ROOT, ".env")
+        try:
+            with open(env_path, "a", encoding="utf-8") as fh:
+                fh.write(f"\n# Auto-added by start.py on first llm-fleet launch\n")
+                fh.write(f"TRM_RIG={rig}\n")
+            os.environ["TRM_RIG"] = str(rig)
+        except OSError as exc:
+            print(f"{YELLOW}!!! Could not write TRM_RIG to .env: {exc}{RESET}")
+
+    if rig not in (1, 2, 3):
+        print(f"{YELLOW}!!! TRM_RIG must be 1, 2, or 3 — got {rig}.{RESET}")
+        sys.exit(2)
+
+    return rig
 
 
 # ANSI color constants now live in src/cli/console.py (imported at the

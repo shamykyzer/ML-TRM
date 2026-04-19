@@ -217,15 +217,16 @@ def _resume_training_picker() -> None:
 # The two task keys must exist in TASK_DISPATCH or the picker errors loudly
 # at launch — single source of truth for "which configs go with which family".
 LLM_FAMILIES: List[Tuple[str, str, str, str]] = [
-    ("llm-gpt2",   "GPT-2 (124M) LoRA",     "llm-gpt2-sudoku",   "llm-gpt2-maze"),
-    ("llm-smollm", "SmolLM2-360M LoRA",     "llm-smollm-sudoku", "llm-smollm-maze"),
-    ("llm-qwen",   "Qwen2.5-0.5B LoRA",     "llm-qwen-sudoku",   "llm-qwen-maze"),
-    ("llm-llama",  "Llama-3.2-1B LoRA",     "llm-llama-sudoku",  "llm-llama-maze"),
+    ("llm-gpt2",     "GPT-2 (124M) LoRA",               "llm-gpt2-sudoku",     "llm-gpt2-maze"),
+    ("llm-smollm",   "SmolLM2-360M LoRA",               "llm-smollm-sudoku",   "llm-smollm-maze"),
+    ("llm-qwen",     "Qwen2.5-0.5B LoRA",               "llm-qwen-sudoku",     "llm-qwen-maze"),
+    ("llm-llama",    "Llama-3.2-1B LoRA",               "llm-llama-sudoku",    "llm-llama-maze"),
+    ("llm-deepseek", "DeepSeek-R1-Distill-Qwen-1.5B",   "llm-deepseek-sudoku", "llm-deepseek-maze"),
 ]
 
 
 def _prompt_fresh_target_and_seed() -> Tuple[str, List[str], int]:
-    """Show TRM tasks + 4 LLM families + an all-families option; return (label, [task, ...], seed).
+    """Show TRM tasks + 5 LLM families + an all-families sweep + a per-rig fleet option; return (label, [task, ...], seed).
 
     TRM picks return a single-element task list; LLM family picks return
     [sudoku_task, maze_task]; the all-families pick returns all 8 LLM task
@@ -261,6 +262,14 @@ def _prompt_fresh_target_and_seed() -> Tuple[str, List[str], int]:
         f"({len(all_llm_tasks)} runs, sudoku \u2192 maze per family)",
         all_llm_tasks,
     ))
+    # Placeholder for "this rig's fleet queue" — rig identity is resolved
+    # AFTER the user picks this option (so we don't prompt for TRM_RIG if
+    # they pick anything else). See the post-selection branch below.
+    entries.append((
+        "llm-fleet-rig",
+        "This rig's Option-B fleet queue (TRM_RIG-scoped, longest-first)",
+        [],
+    ))
 
     print(f"\n{BOLD}Which target?{RESET}")
     print(f"  {DIM}-- TRM (paper architectures) --{RESET}")
@@ -271,12 +280,13 @@ def _prompt_fresh_target_and_seed() -> Tuple[str, List[str], int]:
     # Show individual families first, then the all-families sweep last
     # (so the menu numbering puts the bigger option at the bottom where
     # the eye naturally scans for "run everything").
-    for i, (label, desc, _) in enumerate(entries[n_trm:-1], n_trm + 1):
+    for i, (label, desc, _) in enumerate(entries[n_trm:-2], n_trm + 1):
         print(f"  {CYAN}{i:>2}{RESET}) {label:<13s}  {DIM}{desc}{RESET}")
     print(f"  {DIM}-- Sweep --{RESET}")
-    all_idx = len(entries)
-    all_label, all_desc, _ = entries[-1]
-    print(f"  {CYAN}{all_idx:>2}{RESET}) {all_label:<13s}  {DIM}{all_desc}{RESET}")
+    # The two sweep entries are the last two appended to `entries`.
+    for offset, entry in enumerate(entries[-2:], start=len(entries) - 1):
+        label, desc, _ = entry
+        print(f"  {CYAN}{offset:>2}{RESET}) {label:<15s}  {DIM}{desc}{RESET}")
 
     choice = _prompt(f"Pick 1-{len(entries)}", default="1")
     try:
@@ -287,6 +297,15 @@ def _prompt_fresh_target_and_seed() -> Tuple[str, List[str], int]:
         print(f"{YELLOW}!!! Invalid target choice '{choice}'.{RESET}")
         sys.exit(2)
     label, _, tasks = entries[idx]
+
+    # Late-resolve the rig queue. Only prompts for TRM_RIG when this
+    # entry is actually selected — if the operator picks anything else,
+    # TRM_RIG is never asked about.
+    if label == "llm-fleet-rig":
+        from src.cli.bootstrap import RIG_FLEET_PLAN, _resolve_rig
+        rig = _resolve_rig()
+        tasks = list(RIG_FLEET_PLAN[rig])
+        label = f"llm-fleet-rig{rig}"
 
     seed_str = _prompt("Seed (non-negative int)", default="0")
     try:
