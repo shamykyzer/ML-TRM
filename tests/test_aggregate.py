@@ -286,6 +286,22 @@ def test_loss_delta_pct_blank_when_no_epoch_zero_row(tmp_path):
     assert result["loss_delta_pct"] == ""
 
 
+def test_loss_delta_pct_negative_when_val_loss_increased(tmp_path):
+    """val_loss getting WORSE over training yields a negative delta —
+    valid semantics, not a bug. The plateau figure can distinguish
+    'flat' (delta ≈ 0) from 'degraded' (delta < 0)."""
+    log_path = tmp_path / "test_train_log.csv"
+    log_path.write_text(LLM_TRAIN_LOG_NEGATIVE_DELTA)
+
+    result = parse_train_log(str(log_path))
+
+    assert result is not None
+    assert result["initial_val_loss"] == 2.0
+    assert result["final_val_loss"] == 2.2
+    # (2.0 - 2.2) / 2.0 * 100 = -10.0
+    assert abs(result["loss_delta_pct"] - (-10.0)) < 1e-6
+
+
 # ---------------------------------------------------------------------------
 # Stdlib runner
 # ---------------------------------------------------------------------------
