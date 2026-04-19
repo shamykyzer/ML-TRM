@@ -250,6 +250,12 @@ class LLMTrainer:
             n_batches += 1
             pbar.set_postfix(loss=f"{outputs.loss.item():.4f}")
 
+            # Per-step LM loss logging — only enabled for runs that set
+            # training.log_per_step: true in their YAML (e.g. DeepSeek
+            # plateau runs). Off by default to avoid dashboard clutter.
+            if self.use_wandb and self.tc.log_per_step:
+                wandb.log({"lm/step_loss": outputs.loss.item()})
+
         # Flush trailing micro-batches when len(loader) % accum != 0
         if (len(self.train_loader) % accum) != 0:
             self.optimizer.step()
