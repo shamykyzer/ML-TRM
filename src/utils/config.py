@@ -92,6 +92,12 @@ class TrainingConfig(BaseModel):
     use_weave: bool = True  # Weave traces for wandb.ai/<entity>/<project>/weave/monitors
     log_interval: int = 50
     save_interval: int = 500
+    # Per-step LM loss logging. When True, every gradient-accumulation
+    # micro-batch emits `lm/step_loss` to wandb. Off by default — enabling
+    # produces 1000-4000 points per run which clutters the default dashboard.
+    # Turn on for runs where the plateau claim needs within-epoch visibility
+    # (e.g. DeepSeek-R1-Distill-Qwen-1.5B baseline runs).
+    log_per_step: bool = False
     # How often (epochs) to run the full validation pass. 0 = fall back to
     # log_interval (legacy behavior where logging and eval were fused). Split
     # them when eval is expensive — e.g. log_interval=5 for cheap train-metric
