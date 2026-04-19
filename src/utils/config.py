@@ -49,6 +49,11 @@ class ModelConfig(BaseModel):
     lora_r: int = 8
     lora_alpha: int = 16
     use_qlora: bool = False
+    # Activation checkpointing trades compute for memory by re-running the
+    # forward pass during backward instead of storing activations. Required
+    # on consumer GPUs when seq_len is large (e.g. 900 for maze). Typical
+    # memory reduction ~3-4x at ~20-30% speed cost.
+    use_gradient_checkpointing: bool = False
 
     # Distillation-specific
     distill_n_layers: int = 3

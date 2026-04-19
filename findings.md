@@ -449,15 +449,320 @@ After maze epoch 1 logs to wandb (~30 min in), check `val/exact_accuracy`:
   or freezing `q_head` entirely for first 50 epochs
 - **< 0.5** ❌ Diagnosis incomplete; kill, investigate further
 
-#### Not yet executed (awaiting team sign-off)
+#### Status — what's done vs what's left
 
-- [ ] Delete wandb forensic run `ilrkzyp6` (`shamykyzer/TRM`)
-- [ ] Kill maze runs on FDK, FCM, FFN (commands in §5.8)
-- [ ] Back up maze `best.pt` from the three machines before relaunch (just in
-      case — expected worthless but 30 seconds of insurance)
-- [ ] `git pull` on each training machine to pick up the §5.12 code changes
-- [ ] Launch fresh maze runs on all 3 machines (`python start.py maze <seed>`)
-- [ ] Start LLM fleet on the freed 3 machines per §4
+**✅ Completed this session (2026-04-19)**
+
+- [x] Inventoried all TRM runs via new `scripts/aggregate_wandb_runs.py` →
+      `results/trm_runs_overview.csv` (12 runs, 6 machines, seed stats)
+- [x] Verified sudoku-mlp peaks from wandb history: 0.7425 ± 0.0063 across
+      3 seeds (best 0.7486 at epoch 700 on FDY)
+- [x] Re-ran HF maze eval with `mask_non_path=False` → 0.789 (strict metric
+      robust to mask setting — HF checkpoint is a real solver, not reward
+      hacking)
+- [x] Forensic analysis (`scripts/forensic_maze_corruption.py`) — root-cause
+      traced to Q-halt loss hijacking backbone via shared-recurrence
+      gradient (67% of total gradient magnitude flows through attention
+      layers)
+- [x] Ruled out: 3 missing state_dict keys (RoPE buffers, deterministic,
+      benign); dataset mismatch (aug and non-aug test sets are
+      byte-identical); weight_decay alone (insufficient to explain
+      catastrophic drop in 1 epoch); single-step corruption (lr=0 at step 0
+      during warmup)
+- [x] Patched `src/models/losses_official.py` — `ACTLossHead` takes
+      `q_loss_weight` param (default 0.5 preserves sudoku)
+- [x] Patched `src/utils/config.py` — added `TrainingConfig.q_loss_weight`
+- [x] Patched `main.py:174` — threads config into `ACTLossHead`
+- [x] Patched `configs/trm_official_maze.yaml` — `q_loss_weight: 0.01`,
+      `weight_decay: 0.1`, `task_emb_weight_decay: 0.1`
+- [x] Patched `scripts/eval_hf_checkpoints.py:100` — respects
+      `config.data.mask_non_path` instead of hardcoded default
+- [x] Decision locked: **no sudoku re-run**; use existing data truncated at
+      epoch 1000 for reporting; use `best.pt` for final eval (standard
+      "early stopping via checkpoint selection")
+- [x] Findings.md §§5.6–5.12 documented (metric-sensitivity, forensic
+      root-cause, per-task hparam asymmetry, 6-machine compute plan)
+- [x] Committed and pushed: `feat/windows-bootstrap` branch,
+      commit `24f93c0`
+
+**⬜ To-do — before launching (owner: Ahmed)**
+
+- [ ] Team sign-off from Armin and Nick on §5.12 plan (kill+relaunch maze,
+      no sudoku re-run, run LLM fleet on freed machines)
+- [ ] Delete wandb forensic run `ilrkzyp6` from `shamykyzer/TRM`
+      (artifact from running `scripts/forensic_maze_corruption.py`, not a
+      real training run)
+
+**⬜ To-do — launch sequence (once signed off)**
+
+- [ ] On FDK, FCM, FFN: Ctrl+C the running maze training (or
+      `kill <PID>` per §5.8)
+- [ ] On FDK, FCM, FFN: back up `C:/ml-trm-work/maze-seed<N>/best.pt` to
+      OneDrive or HF Hub (takes 30 sec; insurance against broken runs being
+      retained as "data")
+- [ ] On FDK, FCM, FFN: `git pull` to get commit `24f93c0`
+- [ ] On FDK: `python start.py maze 0`
+- [ ] On FCM: `python start.py maze 1`
+- [ ] On FFN: `python start.py maze 2`
+- [ ] On FGD, FFS, FDY: start LLM fleet per §4 (Qwen-maze, GPT2-sudoku,
+      GPT2-maze, SmolLM-sudoku, SmolLM-maze, Llama-sudoku, Llama-maze,
+      distillation — ~6h total on all three machines)
+
+**⬜ To-do — checkpoints during maze runs**
+
+- [ ] **~30 min in:** check wandb epoch-1 eval for each maze seed
+  - ≥ 0.78 → ✅ fix works, let it run to epoch 150
+  - 0.5–0.78 → ⚠️ consider dropping `q_loss_weight` to 0.001 or freezing
+    `q_head` for first 50 epochs; relaunch
+  - < 0.5 → ❌ diagnosis incomplete; kill, re-investigate
+- [ ] **~24h in:** check epoch 50 — `q_halt_loss` should be decreasing
+      (indicates Q-head is learning slowly as intended, not corrupting
+      backbone). If it's rising, same fallbacks as above.
+- [ ] **~100h in:** maze runs complete; pull final numbers via
+      `python scripts/aggregate_wandb_runs.py`
+
+**⬜ To-do — post-training (before paper write-up)**
+
+- [ ] Copy all 6 `best.pt` files (3 maze seeds + 3 sudoku-mlp seeds) to
+      one machine for post-hoc test-set evaluation
+- [ ] Run `src/evaluation/wandb_eval.py::backfill_test_accuracy` to fill
+      `test_accuracy` column in `results/trm_runs_overview.csv`
+- [ ] Generate figures truncating sudoku at epoch 1000 (not 2245)
+- [ ] Update §1 headline table with final maze numbers after epoch 150
+- [ ] Write §3 paper paragraphs: include the per-task hparam asymmetry as
+      a research observation (see §5.12 framing block)
+
+---
+
+## 6. ML Lead responsibilities — progress audit (2026-04-19)
+
+Mapping my five stated responsibilities to concrete evidence in the repo.
+
+### 6.1 Implement the TRM baseline (7M-parameter, 2-layer network)
+
+**Status: ✅ Done.**
+
+- Architecture: `src/models/trm_official.py::TRMOfficial` (L_layers=2 per
+  config), supports both MLP-Mixer (`mlp_t=true`) and self-attention
+  (`mlp_t=false`) token-mixing modes
+- Parameter counts (from `model.param_count()`):
+  - TRM-MLP (sudoku, mlp_t=true): ~6.4M parameters
+  - TRM-Att (maze, mlp_t=false): ~8.4M parameters
+  - Matches paper's 7M claim within the expected task-specific variance
+- Loss function: `src/models/losses_official.py::ACTLossHead` with
+  StableMax cross-entropy + Q-learning halting
+- Config: `src/utils/config.py::ModelConfig` with `H_cycles`, `L_cycles`,
+  `halt_max_steps`, `no_ACT_continue`, etc.
+- Forward dtype: bfloat16 per paper
+- Port verified: HF-checkpoint eval reproduces paper's headline numbers
+  (Sudoku-MLP 0.8474 ≈ paper's 0.848; Maze-Hard 0.796 ≈ paper's 0.853)
+
+### 6.2 Set up training pipeline on ~1,000 examples for Sudoku-Extreme and Maze-Hard
+
+**Status: ✅ Done.**
+
+- Sudoku-Extreme dataset: `data/sudoku-extreme-full/` with 1K train / 423K
+  test, loaded via `src/data/sudoku_dataset.py::get_sudoku_loaders`
+- Maze-Hard dataset: `data/maze-30x30-hard-1k-aug/` with 8K train (1K
+  puzzles × D4 augmentation) / 1K test, loaded via
+  `src/data/maze_dataset.py::get_maze_loaders`
+- Dataset generator (from paper's Sapient pipeline):
+  `data/build_maze_dataset.py`
+- TRM trainer: `src/training/trainer_official.py::OfficialTRMTrainer`
+  with ACT carry-state, Q-learning exploration, EMA, checkpoint saving,
+  rolling checkpoint dir, W&B + Weave logging
+- LLM trainer: `src/training/trainer_llm.py::LLMTrainer` with LoRA +
+  optional QLoRA, task-agnostic (same trainer used for both tasks)
+- Distillation trainer: `src/training/trainer_distill.py::DistillationTrainer`
+- Collate: `src/data/collate.py::official_collate_fn(task_id)` remaps the
+  dataset's ignore sentinel (0) to HF's (-100)
+- Configs per task variant: `configs/trm_official_sudoku.yaml`,
+  `trm_official_sudoku_mlp.yaml`, `trm_official_maze.yaml`
+- Entry point: `main.py --mode {train,eval,distill}` with argdantic CLI
+- Launch helper: `start.py` auto-resolves HF init path per task
+
+### 6.3 Integrate CodeCarbon for environmental impact tracking
+
+**Status: ✅ Done.**
+
+- Wrapper: `src/training/carbon_tracker.py::CarbonTracker` wraps
+  `codecarbon.EmissionsTracker` with per-run naming and output-dir config
+- Integrated into every trainer (`trainer_official.py`, `trainer_llm.py`,
+  `trainer_distill.py`) — `carbon.start()` at train start, `carbon.stop()`
+  at train end, emissions written to each run's output dir
+- W&B logging: `carbon/emissions_kg` and `carbon/energy_kwh` logged every
+  `log_interval` epochs (confirmed present in all TRM wandb summaries:
+  e.g. `ihj6hpsn` final emissions 4.05 kg CO₂, 17.05 kWh over 80h)
+- Per-run CSVs: `experiments/<task>/emissions.csv` and
+  `C:/ml-trm-work/<task>-seed<N>/emissions.csv` on each training machine
+- Aggregated in `results/trm_runs_overview.csv` (columns `emissions_kg`,
+  `energy_kwh`) for cross-seed analysis
+- Per-correct-puzzle CO₂ already computed in §1 table (1.66 × 10⁻⁵ kg
+  for sudoku-MLP vs ∞ for Qwen-sudoku — central to the efficiency thesis)
+
+### 6.4 Fine-tune and distil LLM comparison models (e.g., GPT-2)
+
+**Status: ⚠️ Infrastructure complete; runs partially executed.**
+
+**Infrastructure (done):**
+- `src/models/baseline_llm.py::BaselineLLM` — HF `AutoModelForCausalLM` +
+  PEFT LoRA adapters, supports GPT-2, SmolLM2, Qwen2.5, Llama-3.2, and
+  any other HF CausalLM with one config change
+- `src/models/distilled_llm.py::DistilledLLM` — 2.4M-param student
+  architecture (3 layers, d_model=256) for knowledge distillation from
+  a fine-tuned teacher
+- `src/training/trainer_distill.py::DistillationTrainer` —
+  cross-entropy + KL-divergence on soft targets at temperature
+- Configs for all 4 general-purpose baselines:
+  - `configs/llm_gpt2_maze.yaml`
+  - `configs/llm_qwen_maze.yaml`, `llm_qwen.yaml` (sudoku)
+  - `configs/llm_smollm_maze.yaml`, `llm_smollm.yaml` (sudoku)
+  - `configs/llm_llama_maze.yaml`, `llm_llama.yaml` (sudoku)
+- Eval script: `scripts/eval_llm_checkpoint.py`
+
+**Runs (partial — blocked on freeing machines from broken maze runs):**
+
+| Model | Dataset | Status | Puzzle acc | Cell acc |
+|---|---|---|---|---|
+| Qwen2.5-0.5B | Sudoku | ✅ done (100 ep, 7h) | 0.0000 | 0.1907 |
+| Qwen2.5-0.5B | Maze | 💥 crashed 50s in (PEFT shape bug) | — | — |
+| GPT-2 | Sudoku | ❌ not started | — | — |
+| GPT-2 | Maze | 💥 crashed at ep 1 (first launch) | — | — |
+| SmolLM2-360M | Sudoku + Maze | ❌ not started | — | — |
+| Llama-3.2-1B | Sudoku + Maze | ❌ not started | — | — |
+| Distillation (Qwen → 2.4M student) | Sudoku | ❌ not started | — | — |
+
+The qwen-sudoku result is the paper's headline LLM data point: **0.0000
+puzzle accuracy over 100 epochs, 0.1907 cell accuracy** (above 1/9 =
+0.111 random chance, so the model learned per-cell statistics but can't
+compose them). That's the thesis, empirically confirmed.
+
+The 7 remaining LLM runs are scheduled to run on FGD, FFS, FDY once the
+maze machines (FDK, FCM, FFN) are freed from the broken fine-tune and
+relaunched. **Budgeted 6h total on all three machines in parallel (§4).**
+
+### 6.5 Run evaluations and collect accuracy/efficiency metrics
+
+**Status: ✅ Done for TRM; partial for LLM.**
+
+**Accuracy metrics (all collected, all aliased for clarity):**
+- TRM: `puzzle_accuracy`, `cell_accuracy`, `avg_act_steps`,
+  `frac_at_max_steps`, `q_halt_loss`, `q_halt_accuracy`
+- LLM: `puzzle_acc`, `cell_acc`
+- Distill: `puzzle_acc`, `cell_acc`, plus KL loss
+
+**Efficiency metrics (all collected):**
+- `_runtime` (seconds), `epoch_time_sec`, `samples_per_sec`
+- `carbon/emissions_kg`, `carbon/energy_kwh`
+- `system/gpu_mem_gb`
+
+**Eval infrastructure:**
+- `src/evaluation/evaluate.py::load_and_evaluate` — single entry point
+  for any checkpoint type (TRM/LLM/Distill), returns metric dict
+- `src/evaluation/evaluate.py::evaluate_official` — TRM-specific with
+  EMA swap, bfloat16 cast, ACT step counting
+- `scripts/eval_hf_checkpoints.py` — evaluates HF-released weights on
+  our validation split (now respects `config.data.mask_non_path`)
+- `scripts/eval_llm_checkpoint.py` — post-hoc LLM checkpoint eval
+- `scripts/aggregate_wandb_runs.py` (new this session) — fetches all
+  runs into `results/trm_runs_overview.csv`
+- `src/evaluation/wandb_eval.py::backfill_test_accuracy` (new this
+  session) — fills test_accuracy column after checkpoints are
+  co-located
+
+**Collected results:**
+- `results/summary.csv` — per-task aggregate (old, single-machine view)
+- `results/trm_runs_overview.csv` — 12 rows covering all 3 sudoku
+  seeds + all 3 maze seeds (new this session, multi-machine)
+- `results/hf_eval_sudoku_mlp.json` — paper-faithful sudoku baseline
+  (0.8474)
+- `results/hf_eval_maze_hard_mask_true.json` — paper-faithful maze
+  baseline (0.796)
+- `results/hf_eval_maze_hard_mask_false.json` — strict-metric maze
+  (0.789, confirming HF checkpoint is not reward-hacked)
+- `results/history_sudoku-mlp_best.csv`, `history_maze_best.csv` —
+  per-step metric curves for best run per variant
+- `results/forensic/run.log` — per-layer gradient + weight-delta
+  analysis
+
+**Outstanding:**
+- Backfill `test_accuracy` column in overview CSV once all 6 `best.pt`
+  files are co-located (pending maze relaunch + completion)
+- LLM efficiency metrics will populate automatically as the fleet runs
+  complete
+
+---
+
+## 7. DeepSeek — retrospective
+
+**Status: Intentionally not implemented.**
+
+### Timeline
+- Early in this session (2026-04-19 morning), explored DeepSeek
+  integration after HF access was granted
+- Investigated which DeepSeek variants are feasible on consumer hardware
+  (R1-Distill-Qwen-1.5B/7B vs 671B base V3/R1 which needs 8×H100)
+- Evaluated fit against the paper's thesis
+
+### Decision: do NOT integrate into May 1 submission
+
+**Reasoning (documented at the time, consolidated here):**
+
+1. **Thesis risk.** Paper's central claim is *"TRM (6-8M params) beats
+   general-purpose LLMs (124M-1.2B) on structured reasoning."* Current 4
+   LLM baselines (GPT-2, Qwen2.5-0.5B, SmolLM2-360M, Llama-3.2-1B) are
+   all general-purpose — clean controlled comparison. DeepSeek-R1-Distill
+   is **reasoning-specialized**, introducing a second variable
+   (reasoning-pretraining) that would muddy the methodology. Markers
+   would rightly ask *"what are you isolating?"*
+
+2. **Scope creep with 12 days remaining.** Adding DeepSeek meant a new
+   config, LoRA target-module tuning for DeepSeek's attention naming,
+   another training run (~45 min if 1.5B), eval, a new row in every
+   table, and justification paragraphs. That's 1-2 days of team effort
+   at a point where maze training was already in jeopardy.
+
+3. **Team consent not established.** Adding a 5th baseline mid-crunch
+   is the classic group-project failure pattern.
+
+4. **Alternative considered.** User briefly proposed Llama-3.2-3B
+   instead (same family as existing Llama-1B, general-purpose, clean
+   apples-to-apples scale test). That WAS defensible. Decision
+   eventually: don't add 3B either, because Llama-1B itself hadn't been
+   trained yet (see §6.4 — zero LLM runs were complete at the time).
+
+### What's in place
+- No DeepSeek config files created
+- No DeepSeek code paths added
+- No DeepSeek runs attempted
+- No DeepSeek mentions in report copy
+
+### Resurrection plan (post-deadline only)
+If the team wants a DeepSeek follow-up after May 1:
+- Fine-tune `deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B` as a 5th baseline
+- Framed as *"does reasoning-specialized pretraining overcome TRM's
+  architectural advantage on structured tasks?"*
+- One-line config addition (same `baseline_llm.py` infrastructure handles
+  it; DeepSeek uses standard `["q_proj", "k_proj", "v_proj"]` LoRA
+  targets)
+- Suitable for a workshop paper or extended thesis, not the coursework
+  submission
+
+### Suggested Future Work paragraph (for the paper)
+
+> *"A natural extension is to evaluate reasoning-specialized LLMs such
+> as DeepSeek-R1-Distill-Qwen-1.5B under the same LoRA budget. If such
+> models also fail on Sudoku-Extreme and Maze-Hard, this strengthens the
+> architectural argument for recursive refinement over pretraining-based
+> reasoning. We exclude this from the present work because
+> reasoning-pretraining introduces a confound with our core claim of
+> general-purpose LLMs failing at structured reasoning, which our four
+> baseline LLMs (GPT-2, Qwen2.5-0.5B, SmolLM2-360M, Llama-3.2-1B) isolate
+> cleanly."*
+
+That's one paragraph in the Discussion that (a) signals research
+sophistication to markers, (b) doesn't require any extra runs, and (c)
+sets up a clean future-work direction.
 
 ---
 

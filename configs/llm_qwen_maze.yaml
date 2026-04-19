@@ -6,7 +6,8 @@ model:
   llm_name: Qwen/Qwen2.5-0.5B
   lora_r: 8
   lora_alpha: 16
-  use_qlora: false
+  use_qlora: true                  # OOM'd at batch=2 without this — seq_len=900 needs 4-bit
+  use_gradient_checkpointing: true # ~3-4x activation memory reduction
 
 training:
   lr: 0.00005

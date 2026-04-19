@@ -231,6 +231,7 @@ def _run_train_once(config: ExperimentConfig, resume: str = "", init_weights: st
             lora_r=config.model.lora_r,
             lora_alpha=config.model.lora_alpha,
             use_qlora=config.model.use_qlora,
+            use_gradient_checkpointing=config.model.use_gradient_checkpointing,
         )
         print(f"LLM trainable params: {model.trainable_param_count():,} / {model.total_param_count():,}")
 
@@ -349,6 +350,9 @@ def _run_distill(config: ExperimentConfig, teacher_checkpoint: str) -> None:
             lora_r=teacher_model_cfg.get("lora_r", config.model.lora_r),
             lora_alpha=teacher_model_cfg.get("lora_alpha", config.model.lora_alpha),
             use_qlora=teacher_model_cfg.get("use_qlora", config.model.use_qlora),
+            use_gradient_checkpointing=teacher_model_cfg.get(
+                "use_gradient_checkpointing", config.model.use_gradient_checkpointing
+            ),
         )
         teacher.load_state_dict(teacher_ckpt["model_state_dict"])
         teacher_kind = "baseline_llm"

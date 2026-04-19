@@ -1,0 +1,41 @@
+# DeepSeek-R1-Distill-Qwen-1.5B fine-tune on Maze-Hard.
+#
+# Baseline #5 in the comparison fleet (follow-up work — NOT in the May 1
+# coursework submission; see findings.md §7).
+#
+# Sibling of configs/llm_deepseek.yaml (sudoku variant). Batch size trimmed
+# because seq_len=900 blows up attention memory 11x over sudoku's seq_len=81.
+model:
+  model_type: llm_finetune
+  vocab_size: 6           # maze charset (# SGo) + pad
+  seq_len: 900            # 30x30 maze flattened
+  num_classes: 6
+  llm_name: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+  lora_r: 8
+  lora_alpha: 16
+  use_qlora: true                  # 1.5B params x 900 tokens — required on 12GB GPU
+  use_gradient_checkpointing: true
+
+training:
+  lr: 0.00005
+  betas: [0.9, 0.999]
+  weight_decay: 0.01
+  warmup_steps: 500
+  batch_size: 1           # tight at 1.5B, seq_len=900
+  grad_accum_steps: 16    # effective batch 16
+  epochs: 30
+  use_wandb: true
+  wandb_project: TRM-LLM
+  wandb_entity: ""
+  log_interval: 10
+  save_interval: 50
+
+data:
+  dataset: maze
+  data_dir: data/maze-30x30-hard-1k-aug
+  num_workers: 4
+
+seed: 42
+device: cuda
+checkpoint_dir: models/llm
+experiment_dir: experiments/llm

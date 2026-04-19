@@ -7,6 +7,7 @@ model:
   lora_r: 8
   lora_alpha: 16
   use_qlora: false
+  use_gradient_checkpointing: true # seq_len=900 attention maps benefit from checkpointing
 
 training:
   lr: 0.00005

@@ -6,7 +6,8 @@ model:
   llm_name: meta-llama/Llama-3.2-1B
   lora_r: 8
   lora_alpha: 16
-  use_qlora: false
+  use_qlora: true                  # 1.2B params x 900 tokens — required on 12GB GPU
+  use_gradient_checkpointing: true # further memory reduction at seq_len=900
 
 training:
   lr: 0.00005

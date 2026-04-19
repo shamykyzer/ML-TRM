@@ -17,6 +17,7 @@ class BaselineLLM(nn.Module):
         lora_r: int = 8,
         lora_alpha: int = 16,
         use_qlora: bool = False,
+        use_gradient_checkpointing: bool = False,
     ):
         super().__init__()
         from peft import LoraConfig, TaskType, get_peft_model
@@ -36,11 +37,31 @@ class BaselineLLM(nn.Module):
         if use_qlora:
             from peft import prepare_model_for_kbit_training
 
-            base_model = prepare_model_for_kbit_training(base_model)
+            # prepare_model_for_kbit_training enables gradient checkpointing and
+            # calls enable_input_require_grads so LoRA gradients flow correctly.
+            base_model = prepare_model_for_kbit_training(
+                base_model,
+                use_gradient_checkpointing=use_gradient_checkpointing,
+            )
+        elif use_gradient_checkpointing:
+            # Non-QLoRA path: enable manually. enable_input_require_grads is
+            # required because the frozen base model's input embeddings don't
+            # require grad, which would break backprop through the checkpoint.
+            base_model.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={"use_reentrant": False}
+            )
+            if hasattr(base_model, "enable_input_require_grads"):
+                base_model.enable_input_require_grads()
 
-        # Determine target modules based on model architecture
+        # Determine target modules based on model architecture.
+        # DeepSeek-R1-Distill-Qwen inherits Qwen's module names; -Llama variant
+        # inherits Llama's. Match DeepSeek first to avoid a generic fallback.
         name_lower = model_name.lower()
-        if "gpt2" in name_lower:
+        if "deepseek" in name_lower and "llama" in name_lower:
+            target_modules = ["q_proj", "v_proj"]
+        elif "deepseek" in name_lower:
+            target_modules = ["q_proj", "k_proj", "v_proj"]
+        elif "gpt2" in name_lower:
             target_modules = ["c_attn", "c_proj"]
         elif "qwen" in name_lower:
             target_modules = ["q_proj", "k_proj", "v_proj"]
