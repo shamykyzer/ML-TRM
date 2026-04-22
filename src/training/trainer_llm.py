@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from src.training.carbon_tracker import CarbonTracker
+from src.training.wall_clock_guard import wall_clock_expired
 from src.training.wandb_utils import define_common_metrics, init_wandb, weave_op
 from src.utils.config import ExperimentConfig
 from src.utils.seed import set_seed
@@ -142,6 +143,17 @@ class LLMTrainer:
             )
 
         for epoch in range(self.tc.epochs):
+            # Novelty iso-time cap. Dormant unless TRM_MAX_TRAIN_SECONDS is set.
+            # Reuses the existing early-stop bookkeeping (last_epoch,
+            # stopped_early) so latest.pt records the right epoch.
+            if wall_clock_expired():
+                tqdm.write(
+                    f"[wall-clock] budget exhausted before epoch {epoch + 1}/{self.tc.epochs} "
+                    f"— halting."
+                )
+                last_epoch = epoch - 1 if epoch > 0 else 0
+                stopped_early = True
+                break
             metrics = self._train_epoch(epoch)
 
             if (epoch + 1) % self.tc.log_interval == 0:

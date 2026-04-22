@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from src.training.carbon_tracker import CarbonTracker
+from src.training.wall_clock_guard import wall_clock_expired
 from src.training.wandb_utils import define_common_metrics, init_wandb, weave_op
 from src.utils.config import ExperimentConfig
 from src.utils.seed import set_seed
@@ -149,6 +150,15 @@ class DistillationTrainer:
         t_start = time.time()
 
         for epoch in range(self.tc.epochs):
+            # Novelty iso-time cap. Dormant unless TRM_MAX_TRAIN_SECONDS is set.
+            # Simpler than the LLM trainer — no last_epoch to update, the
+            # post-loop save just writes latest.pt without an epoch number.
+            if wall_clock_expired():
+                tqdm.write(
+                    f"[wall-clock] budget exhausted before epoch {epoch + 1}/{self.tc.epochs} "
+                    f"— halting."
+                )
+                break
             metrics = self._train_epoch(epoch)
 
             if (epoch + 1) % self.tc.log_interval == 0:
