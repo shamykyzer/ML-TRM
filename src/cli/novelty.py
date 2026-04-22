@@ -89,17 +89,23 @@ def _run_script(argv: List[str], env_extras: dict[str, str]) -> int:
     return subprocess.run(argv, env=env, cwd=ROOT).returncode
 
 
-def _run_iso_time(seed: int, max_seconds: int) -> int:
+def _run_iso_time(seed: int, max_seconds: int, rig: int = 0) -> int:
     argv = [
         PYTHON,
         os.path.join("scripts", "run_novelty_iso_time.py"),
         "--seed", str(seed),
-        "--max-train-seconds", str(max_seconds),
     ]
+    # In rig mode, omit --max-train-seconds so the orchestrator picks the
+    # rig's NOVELTY_RIG_BUDGET_SEC default (7 hr / 6 hr per rig). Passing
+    # the all-runs default of 9000 here would override that smarter default.
+    if rig:
+        argv += ["--rig", str(rig)]
+    else:
+        argv += ["--max-train-seconds", str(max_seconds)]
     return _run_script(argv, env_extras={})
 
 
-def _run_k_vote(seed: int, k_values: str, temperature: str) -> int:
+def _run_k_vote(seed: int, k_values: str, temperature: str, rig: int = 0) -> int:
     argv = [
         PYTHON,
         os.path.join("scripts", "run_novelty_k_vote.py"),
@@ -107,6 +113,8 @@ def _run_k_vote(seed: int, k_values: str, temperature: str) -> int:
         "--k-values", k_values,
         "--temperature", temperature,
     ]
+    if rig:
+        argv += ["--rig", str(rig)]
     return _run_script(argv, env_extras={})
 
 
@@ -211,6 +219,16 @@ _NOVELTY_LABELS = (
     "distill-maze",
 )
 
+# Mirror of NOVELTY_RIG_PLAN in scripts/run_novelty_iso_time.py — used
+# only for the menu's per-rig confirmation banner. Source of truth lives
+# in the orchestrator; duplicating here keeps this module import-light.
+_NOVELTY_RIG_LABELS: dict[int, tuple[str, ...]] = {
+    1: ("trm-mlp-sudoku", "trm-att-maze"),
+    2: ("qwen-sudoku", "distill-sudoku"),
+    3: ("qwen-maze", "distill-maze"),
+}
+_NOVELTY_RIG_BUDGET_HR: dict[int, float] = {1: 7.0, 2: 6.0, 3: 6.0}
+
 
 def _find_missing_checkpoints(work_dir: str, seed: int) -> List[str]:
     """Return labels whose artifact dir has no *latest.pt file."""
@@ -228,13 +246,71 @@ def _find_missing_checkpoints(work_dir: str, seed: int) -> List[str]:
     return missing
 
 
+def _novelty_this_rig() -> None:
+    """Run this rig's slice of the 3-rig split (training + K-vote).
+
+    Resolves TRM_RIG via the existing helper in src.cli.bootstrap, which
+    reads from env or prompts and persists to .env. Each rig gets only
+    its 2 runs so the per-run wall-clock budget can be 2.4-2.8x longer
+    than the 1-rig mode (7 hr or 6 hr/run vs 2.5 hr/run).
+    """
+    from src.cli.bootstrap import _resolve_rig
+
+    rig = _resolve_rig()
+    seed = _prompt_seed()
+    k_values = _prompt("K values (comma-separated)", default=DEFAULT_K_VALUES)
+    temperature = _prompt("LLM sampling temperature", default=DEFAULT_TEMPERATURE)
+    work_dir = _resolve_work_dir()
+
+    labels = _NOVELTY_RIG_LABELS[rig]
+    per_run_hr = _NOVELTY_RIG_BUDGET_HR[rig]
+    total_train_hr = per_run_hr * len(labels)
+
+    _print_banner(
+        f"Novelty: rig {rig} slice — iso-time -> K-vote",
+        [
+            f"rig                : {CYAN}{rig}{RESET}  {DIM}(TRM_RIG){RESET}",
+            f"seed               : {CYAN}{seed}{RESET}",
+            f"runs on this rig   : {CYAN}{', '.join(labels)}{RESET}",
+            f"wall-clock per run : {CYAN}{per_run_hr:.1f}{RESET} hr "
+            f"{DIM}(rig default){RESET}",
+            f"training budget    : {CYAN}{total_train_hr:.1f}{RESET} hr "
+            f"{DIM}({len(labels)} runs){RESET}",
+            f"K values           : {CYAN}{k_values}{RESET}",
+            f"LLM temperature    : {CYAN}{temperature}{RESET}",
+            f"heavy artifacts    : {DIM}{work_dir}/novelty-*-seed{seed}/{RESET}",
+            f"partial CSV/plots  : {DIM}results/novelty/ (merge via aggregator){RESET}",
+        ],
+    )
+    print(
+        f"{DIM}    After all 3 rigs finish, run "
+        f"`python scripts/run_novelty_aggregate.py` on any machine to{RESET}"
+    )
+    print(f"{DIM}    merge the three partial CSVs + plots into the final figure set.{RESET}")
+    if not _confirm("Launch this rig's slice?"):
+        print(f"{DIM}Aborted.{RESET}\n")
+        return
+
+    rc_iso = _run_iso_time(seed, max_seconds=0, rig=rig)
+    if rc_iso != 0:
+        print(f"{YELLOW}!!! iso-time slice exited {rc_iso} — K-vote skipped.{RESET}")
+        sys.exit(rc_iso)
+
+    print(f"\n{GREEN}{BOLD}Rig {rig} training complete.{RESET} Launching K-vote...\n")
+    rc_kvote = _run_k_vote(seed, k_values, temperature, rig=rig)
+    sys.exit(rc_kvote)
+
+
 def novelty_launcher() -> None:
     """Entry point wired into the main launcher as option 7."""
     print(f"\n{BOLD}Novelty experiments{RESET}  {DIM}(iso-time + K-vote){RESET}")
     print(f"  {DIM}See results/novelty/README.md for design rationale.{RESET}\n")
+    print(f"  {DIM}-- Single-rig (~17 hr end-to-end) --{RESET}")
     print(f"  {CYAN}1{RESET}) Iso-time training sweep only   {DIM}(6 runs, ~15 hr){RESET}")
     print(f"  {CYAN}2{RESET}) K-vote inference sweep only    {DIM}(requires checkpoints from option 1){RESET}")
     print(f"  {CYAN}3{RESET}) Both, sequenced                {DIM}(~17 hr end-to-end){RESET}")
+    print(f"  {DIM}-- 3-rig split (each rig runs ~12-14 hr) --{RESET}")
+    print(f"  {CYAN}4{RESET}) This rig's slice               {DIM}(TRM_RIG-scoped; training + K-vote){RESET}")
     print(f"  {CYAN}Q{RESET}) Back")
 
     choice = _prompt("Pick", default="Q").upper()
@@ -247,5 +323,7 @@ def novelty_launcher() -> None:
         _novelty_k_vote_only()
     elif choice == "3":
         _novelty_both()
+    elif choice == "4":
+        _novelty_this_rig()
     else:
         print(f"{YELLOW}!!! Unknown choice '{choice}'.{RESET}")

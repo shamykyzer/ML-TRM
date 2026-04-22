@@ -64,6 +64,28 @@ RUNS: list[RunSpec] = [
 ]
 
 
+# 3-rig split. Each (teacher, student) pair stays on the same rig so the
+# distill teacher checkpoint never leaves local disk. Rig 1 has both fully
+# independent TRM runs; rigs 2 and 3 each carry a sequential Qwen->Distill
+# pipeline. Default per-rig wall-clock budgets in NOVELTY_RIG_BUDGET_SEC
+# below give each model ~2.4-2.8x more training time than the 1-rig mode.
+NOVELTY_RIG_PLAN: dict[int, list[int]] = {
+    1: [1, 2],   # TRM-MLP/Sudoku + TRM-att/Maze
+    2: [3, 5],   # Qwen/Sudoku -> Distill/Sudoku
+    3: [4, 6],   # Qwen/Maze   -> Distill/Maze
+}
+
+# Per-rig per-run defaults in seconds. Rig 1's two runs are fully
+# independent so each gets the full ~7 hr; rigs 2 and 3 leave a margin
+# for the distill student to consume the just-trained teacher (6 hr each
+# = 12 hr total, well inside a 14 hr window).
+NOVELTY_RIG_BUDGET_SEC: dict[int, int] = {
+    1: 25200,  # 7.0 hr per run
+    2: 21600,  # 6.0 hr per run
+    3: 21600,  # 6.0 hr per run
+}
+
+
 @dataclass
 class RunResult:
     spec: RunSpec
@@ -455,15 +477,23 @@ def _parse_skip(raw: str) -> set[int]:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--max-train-seconds", type=int, default=9000,
-                   help="per-run wall-clock budget (default 9000 = 2.5 hr)")
+    p.add_argument("--max-train-seconds", type=int, default=0,
+                   help="per-run wall-clock budget. 0 = use rig default (or "
+                        "9000 = 2.5 hr in single-rig mode)")
     p.add_argument("--work-dir", type=str, default="",
                    help="override TRM_WORK_DIR (refuses OneDrive paths)")
     p.add_argument("--skip-runs", type=str, default="",
-                   help="comma-separated run indices to skip (1..6)")
+                   help="comma-separated run indices to skip (1..6); "
+                        "mutually exclusive with --rig")
+    p.add_argument("--rig", type=int, default=0, choices=(0, 1, 2, 3),
+                   help="run only this rig's slice (1=[1,2], 2=[3,5], "
+                        "3=[4,6]); 0 = all 6 runs (single-rig mode)")
     p.add_argument("--dry-run", action="store_true",
                    help="print what would run without launching subprocesses")
     args = p.parse_args()
+
+    if args.rig and args.skip_runs:
+        p.error("--rig and --skip-runs are mutually exclusive")
 
     # CLI --work-dir wins over env, but we route it through the same
     # OneDrive-refusal logic by shoving it into the env before _resolve_work_dir.
@@ -471,10 +501,25 @@ def main() -> None:
         os.environ["TRM_WORK_DIR"] = args.work_dir
     work_dir = Path(_resolve_work_dir()).resolve()
 
-    skip = _parse_skip(args.skip_runs)
+    # Resolve the skip set + per-run budget from --rig if set, else from
+    # --skip-runs / --max-train-seconds. Rig mode flips the defaults so a
+    # bare `--rig 1` invocation gets the longer per-run budget without the
+    # operator having to remember the seconds.
+    if args.rig:
+        run_indices = set(NOVELTY_RIG_PLAN[args.rig])
+        skip = {s.idx for s in RUNS} - run_indices
+        max_seconds = args.max_train_seconds or NOVELTY_RIG_BUDGET_SEC[args.rig]
+    else:
+        skip = _parse_skip(args.skip_runs)
+        max_seconds = args.max_train_seconds or 9000
+
     print(f"\n[orchestrator] work_dir        : {work_dir}")
     print(f"[orchestrator] seed            : {args.seed}")
-    print(f"[orchestrator] budget / run    : {args.max_train_seconds}s")
+    print(f"[orchestrator] budget / run    : {max_seconds}s "
+          f"({max_seconds / 3600:.2f} hr)")
+    if args.rig:
+        print(f"[orchestrator] rig             : {args.rig}  "
+              f"(runs {sorted(NOVELTY_RIG_PLAN[args.rig])})")
     if skip:
         print(f"[orchestrator] skipping runs   : {sorted(skip)}")
     if args.dry_run:
@@ -493,13 +538,16 @@ def main() -> None:
             print(f"\n[run {spec.idx}] {spec.label}: SKIPPED via --skip-runs")
             continue
         results[spec.idx] = _run_one(
-            spec, args.seed, work_dir, args.max_train_seconds,
+            spec, args.seed, work_dir, max_seconds,
             results, args.dry_run,
         )
 
     ordered = [results[s.idx] for s in RUNS]
     out_dir = REPO_ROOT / "results" / "novelty"
-    _write_csv(ordered, out_dir / "iso_time_results.csv")
+    # Per-rig filename so concurrent rigs don't clobber each other's CSV on
+    # the shared OneDrive folder; aggregator merges them back together.
+    csv_name = f"iso_time_results-rig{args.rig}.csv" if args.rig else "iso_time_results.csv"
+    _write_csv(ordered, out_dir / csv_name)
     if not args.dry_run:
         _emit_plots(ordered, out_dir)
     _print_summary(ordered)
