@@ -471,6 +471,7 @@ def _interactive_launcher() -> None:
     print(f"  {CYAN}4{RESET}) Show commands   {DIM}(print copy-paste commands and exit){RESET}")
     print(f"  {CYAN}5{RESET}) Resume/extend   {DIM}(continue a finished or Ctrl+C'd run for N more epochs){RESET}")
     print(f"  {CYAN}6{RESET}) Fresh start     {DIM}(new run; LLM family picks run sudoku \u2192 maze back-to-back){RESET}")
+    print(f"  {CYAN}7{RESET}) Novelty         {DIM}(iso-time + K-vote experiments for the report){RESET}")
     print(f"  {CYAN}Q{RESET}) Quit")
 
     choice = _prompt("Pick", default="Q").upper()
@@ -493,6 +494,11 @@ def _interactive_launcher() -> None:
 
     if choice == "6":
         _fresh_start_launcher()
+        return
+
+    if choice == "7":
+        from src.cli.novelty import novelty_launcher
+        novelty_launcher()
         return
 
     if choice in ("1", "2"):
