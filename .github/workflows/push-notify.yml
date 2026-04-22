@@ -1,0 +1,116 @@
+name: Push notification
+
+# Fires on every push to main. Produces two notification channels:
+#   1) A GitHub Actions step summary — visible in the Actions tab and,
+#      with default user settings, via the GitHub mobile app's
+#      "workflow complete" push.
+#   2) A comment on a dedicated tracking issue ("Code Push Tracker"),
+#      which fires an inbox/email notification every time the issue is
+#      updated (subscribe once, get pinged every push).
+#
+# Companion to training-notify.yml, which tracks training CSV updates
+# on a separate issue.
+
+on:
+  push:
+    branches: [main]
+
+# Required permissions to write the issue comment and (if needed)
+# create the tracking issue on the first run.
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build push summary
+        id: summary
+        env:
+          HEAD_MSG: ${{ github.event.head_commit.message }}
+          HEAD_SHA: ${{ github.event.head_commit.id }}
+          HEAD_AUTHOR: ${{ github.event.head_commit.author.name }}
+          COMPARE_URL: ${{ github.event.compare }}
+        run: |
+          echo "## Push landed on main" > summary.md
+          echo "" >> summary.md
+          echo "- **Author:** $HEAD_AUTHOR" >> summary.md
+          echo "- **Head SHA:** \`${HEAD_SHA:0:7}\`" >> summary.md
+          echo "- **Compare:** $COMPARE_URL" >> summary.md
+          echo "" >> summary.md
+          echo "### Commits" >> summary.md
+          echo "" >> summary.md
+          # List the commits in this push (before..after)
+          BEFORE="${{ github.event.before }}"
+          AFTER="${{ github.event.after }}"
+          if [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            git log --pretty=format:'- `%h` %s (%an)' "$BEFORE..$AFTER" >> summary.md
+          else
+            # New branch or first push — just show the head commit.
+            echo "- \`${HEAD_SHA:0:7}\` $HEAD_MSG" >> summary.md
+          fi
+          echo "" >> summary.md
+          echo "" >> summary.md
+          echo "_Pushed: $(date -u '+%Y-%m-%d %H:%M UTC')_" >> summary.md
+          cat summary.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Post notification to tracking issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('summary.md', 'utf8');
+
+            // Find or create the push-tracker issue. Label is the
+            // lookup key — separate from training-progress so the two
+            // notification streams don't tangle.
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'push-notify',
+              state: 'open',
+            });
+
+            let issueNumber;
+            if (issues.length > 0) {
+              issueNumber = issues[0].number;
+            } else {
+              // Make sure the label exists. Create it idempotently —
+              // if it already exists the API returns 422 which we swallow.
+              try {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: 'push-notify',
+                  color: 'cfd3d7',
+                  description: 'Auto-generated push-notification comments',
+                });
+              } catch (e) {
+                if (e.status !== 422) throw e;
+              }
+              const { data: created } = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: 'Code Push Tracker',
+                labels: ['push-notify'],
+                body: [
+                  'This issue receives one comment per push to `main`.',
+                  '',
+                  'Subscribe (bell icon, top-right) to get GitHub/email/mobile',
+                  'push notifications every time new code lands.',
+                ].join('\n'),
+              });
+              issueNumber = created.number;
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body,
+            });
