@@ -44,9 +44,9 @@ training:
   use_wandb: true
   wandb_project: TRM
   wandb_entity: ""                    # set via TRM_WANDB_ENTITY in .env
-  log_interval: 5
-  eval_interval: 50     # run full test-split eval every 50 epochs (vs every 5 when 0)
-  save_interval: 25
+  log_interval: 10
+  eval_interval: 50     # run full test-split eval every 50 epochs (vs every 10 when 0)
+  save_interval: 20
   hf_repo_id: ""                      # set via TRM_HF_REPO_ID in .env
 
   # Crash-recovery rolling backup — set via TRM_ROLLING_CHECKPOINT_DIR in .env

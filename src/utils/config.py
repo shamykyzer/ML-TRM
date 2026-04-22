@@ -90,8 +90,8 @@ class TrainingConfig(BaseModel):
     wandb_project: str = "trm-coursework"
     wandb_entity: str = ""  # empty = use your default wandb user/team
     use_weave: bool = True  # Weave traces for wandb.ai/<entity>/<project>/weave/monitors
-    log_interval: int = 50
-    save_interval: int = 500
+    log_interval: int = 10
+    save_interval: int = 20
     # Per-step LM loss logging. When True, every gradient-accumulation
     # micro-batch emits `lm/step_loss` to wandb. Off by default — enabling
     # produces 1000-4000 points per run which clutters the default dashboard.
