@@ -86,6 +86,7 @@ class _TqdmNewlineFile:
 from src.models.losses_official import ACTLossHead
 from src.training.carbon_tracker import CarbonTracker
 from src.training.ema import EMA
+from src.training.wall_clock_guard import wall_clock_expired
 from src.training.wandb_utils import init_wandb, weave_op
 from src.utils.config import ExperimentConfig
 
@@ -625,6 +626,11 @@ class OfficialTRMTrainer:
 
         epoch_times = []
         last_val = {}
+        # Tracks the most recent epoch we actually completed. Equals
+        # self.tc.epochs - 1 when the loop runs to completion. Updated
+        # at the end of each iteration so a wall-clock break saves
+        # latest.pt with the correct epoch number.
+        last_completed_epoch = self.start_epoch - 1
 
         epoch_iter = tqdm(
             range(self.start_epoch, self.tc.epochs),
@@ -639,6 +645,16 @@ class OfficialTRMTrainer:
             mininterval=0,
         )
         for epoch in epoch_iter:
+            # Novelty iso-time cap. No-op unless TRM_MAX_TRAIN_SECONDS is set
+            # (regular fleet runs unaffected). Checked at top of epoch so the
+            # in-flight epoch is never torn down mid-step.
+            if wall_clock_expired():
+                tqdm.write(
+                    f"[wall-clock] budget exhausted before epoch {epoch + 1}/{self.tc.epochs} "
+                    f"— halting; latest.pt will snapshot epoch {last_completed_epoch + 1}."
+                )
+                break
+
             # MUST be the first line: resets the lazy checkpoint payload per
             # epoch. If we skipped this and a later epoch's save_interval fired
             # without the log_interval branch having rebuilt the payload, we'd
@@ -870,7 +886,13 @@ class OfficialTRMTrainer:
                 slim = slim or {k: v for k, v in payload.items() if k != "optimizer_state_dict"}
                 self._save_milestone_checkpoint(pct, slim)
 
-        final_payload = self._checkpoint_payload(self.tc.epochs - 1)
+            last_completed_epoch = epoch
+
+        # Pin the final save to whichever epoch we actually finished. For a
+        # full run this equals self.tc.epochs - 1 (unchanged behavior). For
+        # a wall-clock-halted run, using last_completed_epoch instead keeps
+        # latest.pt's stored epoch number honest.
+        final_payload = self._checkpoint_payload(last_completed_epoch)
         self._save_checkpoint("latest.pt", final_payload)
         emissions = self.carbon.stop()
 
