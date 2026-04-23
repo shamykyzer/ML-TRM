@@ -194,17 +194,30 @@ def _llm_forward_logits(model, inputs: torch.Tensor) -> torch.Tensor:
     return logits
 
 
-def _llm_sample_preds(logits: torch.Tensor, temperature: float, seed: int) -> torch.Tensor:
-    """Temperature-sampled argmax-equivalent: draw one token per position."""
+def _llm_sample_preds_k(
+    logits: torch.Tensor, temperature: float, k: int, seed: int = 0,
+) -> torch.Tensor:
+    """Draw K temperature-sampled predictions per position in one pass.
+
+    Returns [K, B, L]. Softmax runs once per batch (not K times) and
+    multinomial stays on-device with num_samples=k, eliminating the
+    ~768 MB GPU->CPU copy that dominated the old per-pass loop.
+    """
+    B, L, V = logits.shape
     if temperature <= 0:
-        return logits.argmax(-1)
+        # Argmax is deterministic — duplicate across K for shape consistency
+        # so the caller's mode-vote reduces to the same value.
+        preds = logits.argmax(-1)
+        return preds.unsqueeze(0).expand(k, -1, -1).contiguous()
     scaled = logits / temperature
-    probs = F.softmax(scaled.float(), dim=-1)
-    B, L, V = probs.shape
-    g = torch.Generator(device="cpu").manual_seed(seed)
-    flat = probs.reshape(-1, V).cpu()
-    idx = torch.multinomial(flat, num_samples=1, generator=g).squeeze(-1)
-    return idx.reshape(B, L).to(logits.device)
+    probs = F.softmax(scaled.float(), dim=-1).reshape(-1, V)  # [B*L, V]
+    # Match the generator device to the tensor so we avoid a CPU round-trip;
+    # seed is per-batch (not per-pass) because reproducibility within a batch
+    # is what matters for the K-vote comparison.
+    gen_device = probs.device if probs.is_cuda else torch.device("cpu")
+    g = torch.Generator(device=gen_device).manual_seed(seed)
+    idx = torch.multinomial(probs, num_samples=k, replacement=True, generator=g)  # [B*L, K]
+    return idx.T.reshape(k, B, L).contiguous()
 
 
 def run_k_vote_llm(
@@ -248,10 +261,10 @@ def run_k_vote_llm(
                     labels = raw_labels
                 labels = torch.where(labels == 0, torch.full_like(labels, IGNORE_LABEL_ID), labels)
 
-                preds_stack = torch.stack(
-                    [_llm_sample_preds(logits, temperature, seed=i) for i in range(k)],
-                    dim=0,
-                )
+                # Single softmax + single multinomial(num_samples=k); the old
+                # per-pass list-comp redid softmax and a 768 MB GPU->CPU copy K
+                # times per batch, which dominated wall-clock (~2 s × K / batch).
+                preds_stack = _llm_sample_preds_k(logits, temperature, k)
                 # K=1 with temp>0 is stochastic; that's the intended baseline —
                 # the paper reports K=1 vs K>1 under the same sampling regime.
                 voted = _majority_vote(preds_stack)
