@@ -354,11 +354,15 @@ def _run_distill(config: ExperimentConfig, teacher_checkpoint: str) -> None:
                 "use_gradient_checkpointing", config.model.use_gradient_checkpointing
             ),
         )
-        # .to(device) must precede load: QLoRA bnb Linear4bit quant buffers
-        # (absmax/quant_map/quant_state) only materialize once weights land on CUDA.
+        # strict=False: bnb Linear4bit._load_from_state_dict consumes the
+        # quant_state side-entries (weight.absmax / weight.quant_map /
+        # weight.quant_state.bitsandbytes__nf4) to rebuild QuantState, but does
+        # not remove them from PyTorch's unexpected-keys bookkeeping, so
+        # strict=True false-positives on every QLoRA checkpoint. Load is
+        # correct either way — base-packed weights and LoRA params both land.
         teacher_device = config.device if torch.cuda.is_available() else "cpu"
         teacher.to(teacher_device)
-        teacher.load_state_dict(teacher_ckpt["model_state_dict"])
+        teacher.load_state_dict(teacher_ckpt["model_state_dict"], strict=False)
         teacher_kind = "baseline_llm"
     else:
         teacher = DistilledLLM(

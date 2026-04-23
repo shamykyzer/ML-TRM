@@ -161,10 +161,12 @@ def _build_baseline_llm(config: ExperimentConfig, ckpt: dict, device: str):
             "use_gradient_checkpointing", config.model.use_gradient_checkpointing,
         ),
     )
-    # .to(device) must precede load: QLoRA bnb Linear4bit quant buffers
-    # (absmax/quant_map/quant_state) only materialize once weights land on CUDA.
+    # strict=False: bnb Linear4bit consumes weight.absmax / weight.quant_map /
+    # weight.quant_state.bitsandbytes__nf4 to rebuild QuantState but leaves them
+    # in the unexpected-keys set, so strict=True false-positives on every QLoRA
+    # checkpoint. Load is correct either way.
     model.to(device)
-    model.load_state_dict(ckpt["model_state_dict"])
+    model.load_state_dict(ckpt["model_state_dict"], strict=False)
     return model
 
 

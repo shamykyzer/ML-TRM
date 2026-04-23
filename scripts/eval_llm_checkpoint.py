@@ -36,15 +36,16 @@ def main(config_path: str, ckpt_path: str, max_batches: int = 200) -> None:
         use_qlora=cfg.model.use_qlora,
     )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # .to(device) must precede load: QLoRA bnb Linear4bit quant buffers
-    # (absmax/quant_map/quant_state) only materialize once weights land on CUDA,
-    # and the packed-weight shape also only matches post-quantization.
     model.to(device)
     print(f"[Eval] device = {device}")
 
     print("[Eval] loading checkpoint...")
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-    model.load_state_dict(ckpt["model_state_dict"])
+    # strict=False: bnb Linear4bit consumes weight.absmax / weight.quant_map /
+    # weight.quant_state.bitsandbytes__nf4 to rebuild QuantState but leaves them
+    # in the unexpected-keys set, so strict=True false-positives on every QLoRA
+    # checkpoint. Load is correct either way.
+    model.load_state_dict(ckpt["model_state_dict"], strict=False)
     model.eval()
 
     print("[Eval] building test loader...")
