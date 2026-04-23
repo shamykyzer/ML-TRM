@@ -161,8 +161,11 @@ def _build_baseline_llm(config: ExperimentConfig, ckpt: dict, device: str):
             "use_gradient_checkpointing", config.model.use_gradient_checkpointing,
         ),
     )
+    # .to(device) must precede load: QLoRA bnb Linear4bit quant buffers
+    # (absmax/quant_map/quant_state) only materialize once weights land on CUDA.
+    model.to(device)
     model.load_state_dict(ckpt["model_state_dict"])
-    return model.to(device)
+    return model
 
 
 def _build_distilled(config: ExperimentConfig, ckpt: dict, device: str):

@@ -354,6 +354,10 @@ def _run_distill(config: ExperimentConfig, teacher_checkpoint: str) -> None:
                 "use_gradient_checkpointing", config.model.use_gradient_checkpointing
             ),
         )
+        # .to(device) must precede load: QLoRA bnb Linear4bit quant buffers
+        # (absmax/quant_map/quant_state) only materialize once weights land on CUDA.
+        teacher_device = config.device if torch.cuda.is_available() else "cpu"
+        teacher.to(teacher_device)
         teacher.load_state_dict(teacher_ckpt["model_state_dict"])
         teacher_kind = "baseline_llm"
     else:

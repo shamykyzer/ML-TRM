@@ -35,19 +35,17 @@ def main(config_path: str, ckpt_path: str, max_batches: int = 200) -> None:
         lora_alpha=cfg.model.lora_alpha,
         use_qlora=cfg.model.use_qlora,
     )
-    print("[Eval] loading checkpoint...")
-    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    missing, unexpected = model.load_state_dict(ckpt["model_state_dict"], strict=False)
-    print(f"[Eval] load: missing={len(missing)} unexpected={len(unexpected)}")
-    if len(missing) > 0:
-        print(f"[Eval] first missing: {missing[:3]}")
-    if len(unexpected) > 0:
-        print(f"[Eval] first unexpected: {unexpected[:3]}")
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # .to(device) must precede load: QLoRA bnb Linear4bit quant buffers
+    # (absmax/quant_map/quant_state) only materialize once weights land on CUDA,
+    # and the packed-weight shape also only matches post-quantization.
     model.to(device)
-    model.eval()
     print(f"[Eval] device = {device}")
+
+    print("[Eval] loading checkpoint...")
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    model.load_state_dict(ckpt["model_state_dict"])
+    model.eval()
 
     print("[Eval] building test loader...")
     if cfg.data.dataset == "maze":
