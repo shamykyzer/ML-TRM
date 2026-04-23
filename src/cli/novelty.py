@@ -10,9 +10,11 @@ The three options mirror the README's experiment decomposition:
   3) Both, sequenced — the end-to-end novelty run
 """
 import os
+import re
 import subprocess
 import sys
-from typing import List
+import time
+from typing import List, Tuple
 
 from src.cli.console import BOLD, CYAN, DIM, GREEN, RESET, YELLOW
 from src.cli.paths import PYTHON, ROOT
@@ -105,7 +107,14 @@ def _run_iso_time(seed: int, max_seconds: int, rig: int = 0) -> int:
     return _run_script(argv, env_extras={})
 
 
-def _run_k_vote(seed: int, k_values: str, temperature: str, rig: int = 0) -> int:
+def _run_k_vote(
+    seed: int,
+    k_values: str,
+    temperature: str,
+    rig: int = 0,
+    skip_labels: List[str] | None = None,
+    work_dir: str = "",
+) -> int:
     argv = [
         PYTHON,
         os.path.join("scripts", "run_novelty_k_vote.py"),
@@ -113,9 +122,18 @@ def _run_k_vote(seed: int, k_values: str, temperature: str, rig: int = 0) -> int
         "--k-values", k_values,
         "--temperature", temperature,
     ]
+    # --rig and --skip-labels are mutually exclusive in the underlying script;
+    # caller is responsible for passing at most one. We assert here so a
+    # programming bug surfaces as a clean error instead of an argparse failure
+    # inside the subprocess.
+    if rig and skip_labels:
+        raise ValueError("pass rig OR skip_labels, not both")
     if rig:
         argv += ["--rig", str(rig)]
-    return _run_script(argv, env_extras={})
+    if skip_labels:
+        argv += ["--skip-labels", ",".join(skip_labels)]
+    env_extras = {"TRM_WORK_DIR": work_dir} if work_dir else {}
+    return _run_script(argv, env_extras=env_extras)
 
 
 def _novelty_iso_time_only() -> None:
@@ -246,6 +264,175 @@ def _find_missing_checkpoints(work_dir: str, seed: int) -> List[str]:
     return missing
 
 
+_NOVELTY_DIR_RE = re.compile(r"^novelty-(.+)-seed(\d+)$")
+
+
+def _scan_novelty_checkpoints(
+    work_dir: str,
+) -> List[Tuple[str, int, str, float]]:
+    """Return [(label, seed, ckpt_path, mtime), ...] for every novelty-*-seed*
+    dir under work_dir that contains a `*latest.pt`.
+
+    Used by the 'K-vote existing checkpoints' option so the operator doesn't
+    have to remember which rig/seed/labels live in which work dir — useful
+    after a Ctrl+C or when resuming on a fresh shell.
+    """
+    rows: List[Tuple[str, int, str, float]] = []
+    if not os.path.isdir(work_dir):
+        return rows
+    valid_labels = set(_NOVELTY_LABELS)
+    for name in os.listdir(work_dir):
+        m = _NOVELTY_DIR_RE.match(name)
+        if not m:
+            continue
+        label = m.group(1)
+        if label not in valid_labels:
+            continue
+        try:
+            seed = int(m.group(2))
+        except ValueError:
+            continue
+        dir_path = os.path.join(work_dir, name)
+        if not os.path.isdir(dir_path):
+            continue
+        # Prefer the newest `*latest.pt` so we pick up distill_*_latest.pt
+        # over a stale qwen_*_latest.pt left over from a re-run.
+        ckpts = [f for f in os.listdir(dir_path) if f.endswith("latest.pt")]
+        if not ckpts:
+            continue
+        ckpts.sort(
+            key=lambda f: os.path.getmtime(os.path.join(dir_path, f)),
+            reverse=True,
+        )
+        ckpt_path = os.path.join(dir_path, ckpts[0])
+        rows.append((label, seed, ckpt_path, os.path.getmtime(ckpt_path)))
+    return rows
+
+
+def _fmt_age(now: float, mtime: float) -> str:
+    delta_hr = max(0.0, (now - mtime) / 3600.0)
+    if delta_hr < 1.0:
+        return f"{delta_hr * 60:.0f} min ago"
+    if delta_hr < 48.0:
+        return f"{delta_hr:.1f} hr ago"
+    return f"{delta_hr / 24:.1f} d ago"
+
+
+def _print_checkpoint_summary(
+    work_dir: str, rows: List[Tuple[str, int, str, float]],
+) -> None:
+    now = time.time()
+    print(f"  {DIM}work_dir: {work_dir}{RESET}")
+    by_seed: dict[int, list[tuple[str, str, float]]] = {}
+    for label, seed, ckpt, mtime in rows:
+        by_seed.setdefault(seed, []).append((label, ckpt, mtime))
+    for seed in sorted(by_seed):
+        print(f"  {BOLD}seed={seed}{RESET}")
+        for label, ckpt, mtime in sorted(by_seed[seed]):
+            age = _fmt_age(now, mtime)
+            print(
+                f"    {CYAN}{label:<18}{RESET}"
+                f" {DIM}{age:<14}{RESET}"
+                f" {DIM}{os.path.basename(ckpt)}{RESET}"
+            )
+
+
+def _novelty_kvote_existing() -> None:
+    """K-vote whatever checkpoints already exist under the work dir.
+
+    Differs from option 2 in that it auto-discovers (label, seed) pairs
+    rather than assuming the full 6-run set — the intended workflow is
+    'I trained rig N, Ctrl+C'd the K-vote, now re-run K-vote on what
+    actually got trained' without remembering --skip-labels flags.
+
+    A custom work_dir prompt covers the case where checkpoints live on a
+    different drive (e.g. a spare C:/ml-trm-work from a previous machine).
+    """
+    default_work_dir = _resolve_work_dir()
+    rows = _scan_novelty_checkpoints(default_work_dir)
+
+    if rows:
+        print(f"\n{BOLD}Detected novelty checkpoints:{RESET}")
+        _print_checkpoint_summary(default_work_dir, rows)
+        alt = _prompt(
+            "Use a different work_dir? (blank = keep the one above)",
+            default="",
+        )
+        if alt:
+            alt_rows = _scan_novelty_checkpoints(alt)
+            if not alt_rows:
+                print(f"{YELLOW}!!! No novelty checkpoints under {alt}{RESET}")
+                return
+            rows = alt_rows
+            work_dir = alt
+            print(f"\n{BOLD}Detected novelty checkpoints:{RESET}")
+            _print_checkpoint_summary(work_dir, rows)
+        else:
+            work_dir = default_work_dir
+    else:
+        print(f"{YELLOW}!!! No novelty checkpoints under {default_work_dir}{RESET}")
+        alt = _prompt(
+            "Path to an alternate work_dir (blank to abort)",
+            default="",
+        )
+        if not alt:
+            print(f"{DIM}Aborted.{RESET}\n")
+            return
+        rows = _scan_novelty_checkpoints(alt)
+        if not rows:
+            print(f"{YELLOW}!!! No novelty checkpoints under {alt} either{RESET}")
+            return
+        work_dir = alt
+        print(f"\n{BOLD}Detected novelty checkpoints:{RESET}")
+        _print_checkpoint_summary(work_dir, rows)
+
+    seeds_available = sorted({s for _, s, _, _ in rows})
+    if len(seeds_available) == 1:
+        seed = seeds_available[0]
+        print(f"  {DIM}(only seed {seed} detected; using it){RESET}")
+    else:
+        raw = _prompt(
+            f"Seed to K-vote (available: {', '.join(map(str, seeds_available))})",
+            default=str(seeds_available[0]),
+        )
+        try:
+            seed = int(raw)
+        except ValueError:
+            print(f"{YELLOW}!!! Invalid seed: {raw}{RESET}")
+            return
+        if seed not in seeds_available:
+            print(f"{YELLOW}!!! Seed {seed} has no checkpoints under {work_dir}{RESET}")
+            return
+
+    available_labels = sorted({label for label, s, _, _ in rows if s == seed})
+    skip_labels = sorted(set(_NOVELTY_LABELS) - set(available_labels))
+
+    k_values = _prompt("K values (comma-separated)", default=DEFAULT_K_VALUES)
+    temperature = _prompt("LLM sampling temperature", default=DEFAULT_TEMPERATURE)
+
+    _print_banner(
+        "Novelty: K-vote existing checkpoints",
+        [
+            f"work_dir    : {CYAN}{work_dir}{RESET}",
+            f"seed        : {CYAN}{seed}{RESET}",
+            f"labels      : {CYAN}{', '.join(available_labels)}{RESET}",
+            f"skipping    : {DIM}{', '.join(skip_labels) if skip_labels else '(none)'}{RESET}",
+            f"K values    : {CYAN}{k_values}{RESET}",
+            f"temperature : {CYAN}{temperature}{RESET}",
+            f"output      : {DIM}results/novelty/k_vote_results.csv + plots{RESET}",
+        ],
+    )
+    if not _confirm("Launch K-vote?"):
+        print(f"{DIM}Aborted.{RESET}\n")
+        return
+
+    rc = _run_k_vote(
+        seed, k_values, temperature,
+        skip_labels=skip_labels, work_dir=work_dir,
+    )
+    sys.exit(rc)
+
+
 def _novelty_this_rig() -> None:
     """Run this rig's slice of the 3-rig split (training + K-vote).
 
@@ -311,6 +498,8 @@ def novelty_launcher() -> None:
     print(f"  {CYAN}3{RESET}) Both, sequenced                {DIM}(~17 hr end-to-end){RESET}")
     print(f"  {DIM}-- 3-rig split (each rig runs ~12-14 hr) --{RESET}")
     print(f"  {CYAN}4{RESET}) This rig's slice               {DIM}(TRM_RIG-scoped; training + K-vote){RESET}")
+    print(f"  {DIM}-- Existing checkpoints --{RESET}")
+    print(f"  {CYAN}5{RESET}) K-vote existing checkpoints    {DIM}(auto-discover; resume after Ctrl+C){RESET}")
     print(f"  {CYAN}Q{RESET}) Back")
 
     choice = _prompt("Pick", default="Q").upper()
@@ -325,5 +514,7 @@ def novelty_launcher() -> None:
         _novelty_both()
     elif choice == "4":
         _novelty_this_rig()
+    elif choice == "5":
+        _novelty_kvote_existing()
     else:
         print(f"{YELLOW}!!! Unknown choice '{choice}'.{RESET}")
