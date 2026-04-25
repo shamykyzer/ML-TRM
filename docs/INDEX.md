@@ -31,6 +31,11 @@ top-level Markdown files are architectural + status-oriented.
 - [wandb_metrics_glossary.md](wandb_metrics_glossary.md) — Definitions of
   every wandb key we log (puzzle_acc, cell_acc, avg_act_steps,
   halt_exploration_prob, CO2/correct, etc.).
+- [weave_setup.md](weave_setup.md) — Operational guide for the Weave layer:
+  per-puzzle eval traces, mid-run regression alerts, `weave.Model`
+  wrappers, cross-checkpoint `weave.Evaluation`, and the
+  auto-rebuilding runs Report publisher. Read this when you want to
+  diagnose *which* puzzles a checkpoint fails on, not just how often.
 - [architecture.puml](architecture.puml) — PlantUML source for the
   architecture diagram in the report.
 - [2510.04871v1.pdf](2510.04871v1.pdf) — Less-is-More TRM paper (the

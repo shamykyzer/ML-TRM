@@ -269,6 +269,11 @@ class OfficialTRMTrainer:
         # best.pt is saved + registered, and skip the call on subsequent bests.
         self._best_wandb_registered = False
 
+        # One-shot regression alert — fires the first time val drops more than
+        # tc.regression_alert_threshold below self.best_acc. Catches dz3tkge9-
+        # style fine-tune regressions in one eval cycle instead of 23 hours.
+        self._regression_alert_fired = False
+
         # CSV log
         self.log_path = os.path.join(
             config.experiment_dir, f"{config.model.model_type.value}_train_log.csv"
@@ -556,6 +561,75 @@ class OfficialTRMTrainer:
         }
         print(f"[EMA] shadow reseeded from model params ({reason}, fp32)")
 
+    def _maybe_alert_on_regression(self, current_puzzle_acc: float, epoch_1based: int) -> None:
+        """Fire wandb.alert when val_puzzle_acc drops below best by threshold.
+
+        One-shot per run (further drops in the same run don't re-fire — the
+        first signal is enough to triage). Skipped silently when wandb is off,
+        when threshold is 0, or before the first new-best has been seen
+        (self.best_acc==0 means we have no baseline to compare against yet).
+        """
+        threshold = self.tc.regression_alert_threshold
+        if (
+            threshold <= 0
+            or self._regression_alert_fired
+            or not self.use_wandb
+            or self.best_acc <= 0
+        ):
+            return
+
+        drop = self.best_acc - current_puzzle_acc
+        if drop < threshold:
+            return
+
+        self._regression_alert_fired = True
+        title = f"val_puzzle_acc regressed {drop * 100:.2f} pp"
+        text = (
+            f"Epoch {epoch_1based}: val_puzzle_acc={current_puzzle_acc:.4f} "
+            f"(best={self.best_acc:.4f}, drop {drop:.4f}). "
+            f"Threshold {threshold}. Consider stopping the run — see "
+            f"analysis_run_dz3tkge9.md for the seed-4 precedent."
+        )
+        try:
+            wandb.alert(title=title, text=text, level=wandb.AlertLevel.WARN)
+            tqdm.write(f"[ALERT] {title} — {text}")
+        except Exception as e:
+            tqdm.write(f"[ALERT] wandb.alert() failed: {e}; printing instead — {title}: {text}")
+
+    @weave_op()
+    def _trace_eval_puzzle(
+        self,
+        *,
+        epoch: int,
+        index: int,
+        puzzle: list[int],
+        label: list[int],
+        prediction: list[int],
+        halt_step: int,
+        cell_correct: int,
+        cell_total: int,
+        puzzle_correct: bool,
+    ) -> dict:
+        """Per-puzzle Weave trace for sampled eval puzzles.
+
+        The decorator is what emits the trace — the function body just packages
+        the data into a dict that shows up in the Weave UI under the parent
+        evaluate() trace. Callers are responsible for sampling so we don't emit
+        one trace per puzzle on a 6.6k-puzzle eval.
+        """
+        return {
+            "epoch": epoch,
+            "index": index,
+            "puzzle": puzzle,
+            "label": label,
+            "prediction": prediction,
+            "halt_step": halt_step,
+            "cell_correct": cell_correct,
+            "cell_total": cell_total,
+            "cell_acc": cell_correct / max(1, cell_total),
+            "puzzle_correct": puzzle_correct,
+        }
+
     @staticmethod
     def _fmt_time(seconds: float) -> str:
         if seconds >= 86400:
@@ -765,6 +839,11 @@ class OfficialTRMTrainer:
             is_first_epoch_of_process = (epoch == self.start_epoch)
 
             if (epoch + 1) % eff_eval_interval == 0 or is_first_epoch_of_process:
+                # Stash the 1-based epoch so per-puzzle Weave traces can tag
+                # themselves without changing evaluate()'s signature (kept
+                # untouched so diagnose_real_weights.py's 1:1 mirror still
+                # matches).
+                self._current_eval_epoch_label = epoch + 1
                 last_val = self.evaluate()
 
                 if self.use_wandb:
@@ -804,6 +883,13 @@ class OfficialTRMTrainer:
                     # Keep last_val clean for downstream best-tracking code
                     # regardless of whether wandb is enabled.
                     last_val.pop("_halt_steps_tensor", None)
+
+                # Regression alert (one-shot per run). The condition must run
+                # BEFORE self.best_acc is potentially updated by the new-best
+                # branch below, otherwise the threshold drifts upward in the
+                # same step that just set a new best — the alert would never
+                # see the *previous* best.
+                self._maybe_alert_on_regression(last_val["puzzle_acc"], epoch + 1)
 
                 if last_val["puzzle_acc"] > self.best_acc:
                     self.best_acc = last_val["puzzle_acc"]
@@ -1048,6 +1134,25 @@ class OfficialTRMTrainer:
         total_q_halt_correct = 0
         n_samples = 0
 
+        # Per-puzzle Weave trace plumbing. Sample uniformly across the dataset
+        # so the traces span easy + hard puzzles. Stride is computed once at
+        # eval-start; budget is decremented per emitted trace. When sample
+        # size is 0 the inner block becomes a no-op (no @weave_op calls fire).
+        trace_target = self.tc.eval_trace_sample_size
+        try:
+            dataset_len = len(self.val_loader.dataset)  # type: ignore[arg-type]
+        except (AttributeError, TypeError):
+            dataset_len = 0
+        if trace_target > 0 and dataset_len > 0:
+            trace_stride = max(1, dataset_len // trace_target)
+        else:
+            trace_stride = 0
+        trace_budget = trace_target
+        # Set by train() right before each evaluate() call so traces are
+        # tagged with the right epoch. Falls back to start_epoch+1 for the
+        # rare standalone evaluate() (e.g. resume's first-epoch warm-up eval).
+        trace_epoch = getattr(self, "_current_eval_epoch_label", self.start_epoch + 1)
+
         # Per-sample "first step at which the Q-head would halt in deployment".
         # The model itself disables early halting outside self.training (see
         # trm_official.py:332), so carry.halted is useless in eval — we have
@@ -1121,6 +1226,33 @@ class OfficialTRMTrainer:
             # Q-halt accuracy
             q_halt_correct = (_outputs["q_halt_logits"] >= 0) == puzzle_correct
             total_q_halt_correct += q_halt_correct.sum().item()
+
+            # Sampled per-puzzle Weave traces. Stride==0 short-circuits the
+            # whole block when traces are disabled. Conversion to Python lists
+            # is intentional — Weave needs JSON-serialisable values, not torch
+            # tensors that hold device handles.
+            if trace_stride > 0 and trace_budget > 0:
+                global_start = n_samples - B  # global index of batch[0]
+                for i in range(B):
+                    if trace_budget <= 0:
+                        break
+                    global_idx = global_start + i
+                    if global_idx % trace_stride != 0:
+                        continue
+                    cell_correct_i = int(((preds[i] == labels[i]) & mask[i]).sum().item())
+                    cell_total_i = int(mask[i].sum().item())
+                    self._trace_eval_puzzle(
+                        epoch=trace_epoch,
+                        index=global_idx,
+                        puzzle=batch["inputs"][i].cpu().tolist(),
+                        label=labels[i].cpu().tolist(),
+                        prediction=preds[i].cpu().tolist(),
+                        halt_step=int(first_halt_step[i].item()),
+                        cell_correct=cell_correct_i,
+                        cell_total=cell_total_i,
+                        puzzle_correct=bool(puzzle_correct[i].item()),
+                    )
+                    trace_budget -= 1
 
             # refresh=False: update postfix state only. tqdm's 50-iter auto
             # refresh (configured above) will pick up the latest values.

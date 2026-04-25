@@ -31,6 +31,7 @@
 | `sudoku-mlp-seed0` | MLP-Mixer (mlp_t=true) | HF-init from Sanjin2024 Sudoku-Extreme-mlp | 2245 | **0.7456 @ ep 900** | 80 hrs | 5.23 | 1.66 × 10⁻⁵ kg | Overfit: val dropped to 0.5948 by ep 2245; stopped training |
 | `sudoku-mlp-seed1` | MLP-Mixer | HF-init | — | **0.7420** (crashed) | — | 4.15 | — | On STU-CZC5277FFS; see §5.2 |
 | `sudoku-mlp-seed2` | MLP-Mixer | HF-init | — | **0.7486** (killed) | — | 4.39 | — | On STU-CZC5277FDY; see §5.2 |
+| `sudoku-mlp-seed4` (`dz3tkge9`) | MLP-Mixer | HF-init | 490 (terminated mid-eval) | **0.7277 final / 0.8484 init never beaten** | 23.5 hrs | 1.20 | — | STU-CZC5277FFS, 2026-04-22→23. Paper-faithful FT regressed init by 12 pp. Diagnosis: [analysis_run_dz3tkge9.md](analysis_run_dz3tkge9.md), fix-config: `configs/trm_official_sudoku_mlp_finetune.yaml` |
 | `sudoku-att` | Attention + RoPE (mlp_t=false) | **From scratch** | 500 | **0.1833 @ ep 100** | 16 hrs | 1.65 | 2.12 × 10⁻⁵ kg | Collapsed to 0% by ep 500; train-acc climbed to 0.96 — textbook overfit |
 | `maze-seed0` | Attention (mlp_t=false) | HF-init from Sanjin2024 Maze-Hard | **running** | **0.202** (so far) | ~38 hrs | 3.57 | — | FDK; actively corrupting HF weights — see §5.7, kill recommended |
 | `maze-seed1` | Attention | HF-init | **running** | **0.189** (so far) | ~38 hrs | 3.53 | — | FCM; same kill recommendation |
@@ -44,6 +45,7 @@ Full aggregate: `results/summary.csv` (sudoku) + `results/trm_runs_overview.csv`
 ### Key observations
 
 - **HF-init + fine-tune is viable** (74.56% on sudoku-MLP) but we overshot the peak by ~1300 epochs. Lesson: next TRM fine-tune should set `early_stop_patience` (config flag already added) around 300 epochs.
+- **Update 2026-04-25 (seed-4 / `dz3tkge9`):** running the *paper-faithful* config as a fine-tuner is worse than overshoot — it actively *regresses* the init. `lr=1e-4`, `weight_decay=1.0`, `q_loss_weight=0.5`, and `halt_exploration_prob=0.1` are all from-scratch values; applied to a converged checkpoint they crash val_puzzle_acc 0.848 → 0.630 in one warmup ramp and never recover. Use `configs/trm_official_sudoku_mlp_finetune.yaml` for any future HF-init Sudoku run; full root-cause breakdown in `analysis_run_dz3tkge9.md`.
 - **From-scratch att training does not converge at our compute scale.** The paper used 8×H200 with effective batch 4608 for 60K epochs. We have 1×RTX 5070 with batch 32-64. That's ~1000× less compute. Our 18% peak followed by collapse is the expected outcome at this scale.
 - **Qwen's 19% cell accuracy is above random chance (1/9 = 11%).** The model learned per-digit statistics — it just can't compose them. That's the thesis, cleanly measured.
 

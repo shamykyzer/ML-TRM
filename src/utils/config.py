@@ -146,6 +146,19 @@ class TrainingConfig(BaseModel):
     early_stop_mode: str = "max"
     early_stop_min_delta: float = 1e-4
 
+    # wandb.alert + Weave-friendly mid-run regression guard. After every eval,
+    # if val_puzzle_acc drops more than `regression_alert_threshold` below the
+    # run's running max, fire a one-shot wandb.alert. Set to 0 to disable.
+    # See docs/weave_setup.md for the matching UI-side Monitor recipe.
+    regression_alert_threshold: float = 0.03
+
+    # Per-puzzle Weave traces during eval. Sample N puzzles uniformly across
+    # the test split per evaluate() call, capturing input/label/prediction/
+    # halt-step. Set to 0 to disable (zero per-puzzle traces; the eval still
+    # produces one outer @weave_op trace). 100 is a good default for 6.6k-
+    # puzzle Sudoku — adds <1 s per eval.
+    eval_trace_sample_size: int = 100
+
 
 class DataConfig(BaseModel):
     dataset: str = "sudoku"

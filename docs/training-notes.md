@@ -104,3 +104,28 @@ The TRM paper ("Less is More", Jolicoeur-Martineau 2025) trains:
 - **1K base samples** with augmentation (1000x shuffle for sudoku, 8x dihedral for maze)
 - **Sudoku:** <36 hours on 1x L40S → 87.4% test accuracy
 - **Maze:** <24 hours on 4x L40S → 85.3% test accuracy
+
+## Fine-tuning a converged TRM checkpoint vs from-scratch training
+
+**The two regimes need different hyperparameters.** From-scratch values
+applied to a converged init (e.g. `--init-weights …Sudoku-Extreme-mlp/…pt`)
+will overshoot the optimum during warmup and may *regress* the init. This
+was burnt into the repo by run `dz3tkge9` (seed-4 sudoku-mlp,
+2026-04-22 → 04-23): paper-faithful config + HF init lost 12 pp of val
+puzzle accuracy and never recovered. Full diagnosis at
+[../analysis_run_dz3tkge9.md](../analysis_run_dz3tkge9.md).
+
+| Field | from-scratch | fine-tune | why it differs |
+|---|---|---|---|
+| `lr` | 1e-4 | **1e-5** | full pretrain LR knocks the converged weights off-optimum at peak |
+| `warmup_steps` | 2000 | **200** | shorter ramp = smaller cumulative off-optimum displacement |
+| `weight_decay` | 1.0 | **0.1** | aggressive WD pulls weights toward zero faster than the (small) loss gradient can pin them |
+| `task_emb_lr` / `task_emb_weight_decay` | 1e-4 / 1.0 | **1e-5 / 0.1** | match the global lr / WD per paper convention |
+| `q_loss_weight` | 0.5 | **0.0** | `configs/trm_official_sudoku_mlp_finetune.yaml` freezes Q-head gradient flow entirely (more conservative than `config.py:131-133`'s 0.01 recommendation) |
+| `halt_exploration_prob` | 0.1 | **0.0** | random halt-decision noise destabilises a halter that's already calibrated |
+| `epochs` | 500–5000 | **150–200** | fine-tunes plateau early; spending more is overfitting |
+| `eval_interval` | 50 | **10** | early-stop needs frequent enough eval to catch the peak |
+
+Active config: [`configs/trm_official_sudoku_mlp_finetune.yaml`](../configs/trm_official_sudoku_mlp_finetune.yaml). Use it whenever
+launching with `--init-weights`. Use `configs/trm_official_sudoku_mlp.yaml`
+only when the goal is from-scratch reproduction.
