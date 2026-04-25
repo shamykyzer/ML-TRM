@@ -134,3 +134,83 @@ Before the report can be written:
 - **HF checkpoint evals:** `results/trm_official_sudoku_eval.json`, `results/hf_eval_maze_hard_mask_*.json`
 - **Plots:** `results/figures/` (older baseline plots) and `results/novelty/*.png` (iso-time and K-vote)
 - **Novelty experiment design doc:** `results/novelty/README.md`
+
+---
+
+## 8. Other runs in `C:\ml-trm-work` (not the latest)
+
+The local `C:\ml-trm-work` working folder holds five other run directories besides the latest distill. Total ~3.1 GB on disk. Inventory and what each is worth:
+
+### 8.1 `maze-seed1` — TRM-Att on Maze-Hard, seed 1 (the only other real run)
+
+| Epoch | Train loss | Avg ACT steps | Val cell acc | Val puzzle acc | Best so far |
+|------:|-----------:|--------------:|-------------:|---------------:|------------:|
+| 50    | 0.361      | 5.4           | 97.0 %       | **27.5 %**     | 27.5 %      |
+| 100   | 0.215      | 3.5           | 96.1 %       | 17.2 %         | 27.5 %      |
+
+- **Total duration:** 65 hours (233 828 s) over 3 calendar days (2026-04-19 → 2026-04-22)
+- **Total energy:** 14.92 kWh, **3.54 kg CO₂** (CodeCarbon, UK grid)
+- **Rise-and-collapse pattern:** peaked at epoch 50 then regressed at epoch 100 — train loss kept dropping (0.36 → 0.22) while val puzzle-acc fell ~10 percentage points. Same pattern as `results/figures/sudoku_att_rise_and_collapse.png` on the maze side.
+- **ACT halting kicked in:** average steps fell 5.4 → 3.5 — the model became confidently wrong, halting earlier on examples it now gets wrong.
+- `best.pt` (41 MB) almost certainly holds epoch-50 weights; `epoch_100.pt` is the worse end-state. Pick deliberately.
+
+### 8.2 The three GPT-2 smoke folders — zero training, no rubric value
+
+| Folder | Duration | Epochs | Energy | Notes |
+|---|---|---|---|---|
+| `llm-fmt-test` | 25 s | **0** | 0.00076 kWh | Header-only log; 501 MB .pt is GPT-2 base weights serialised before any training step |
+| `llm-smoke` | 33 s | **0** | 0.00091 kWh | Same as above, byte-identical 501 MB checkpoint, run 90 min earlier |
+| `llm-maze-smoke` | — | **0** | — | Header-only log, no checkpoint, no emissions — never started |
+
+These were format-check setups before switching from GPT-2 to Qwen2.5-0.5B. **Don't include in the report's tables.** At most, one sentence in Methods justifying the GPT-2 → Qwen switch.
+
+### 8.3 `novelty-qwen-sudoku-seed0` and `novelty-distill-sudoku-seed0`
+
+The Qwen teacher (run #3) and distilled student (run #5, the latest run) — already analysed in §2–§3 above.
+
+---
+
+## 9. Mapping each run onto the spec rubric and proposal claims
+
+The spec rubric (page 9 of `docs/Group Project Specification 2025-26-v4.pdf`) puts **60% of marks on Methods + Experiments**. The proposal commits to a 3×2 matrix: **{TRM, fine-tuned LLM, distilled LLM} × {Sudoku-Extreme, Maze-Hard}**, evaluated on **puzzle accuracy + kWh + CO₂-eq + wall-clock**.
+
+### 9.1 Coverage of the proposal's 6-cell matrix
+
+| Cell | Model | Task | Run on this machine | Status |
+|---|---|---|---|---|
+| (1,1) | TRM-MLP | Sudoku-Extreme | — | ❌ on rig 1 (HF ckpt = 84.7 % available as fallback) |
+| (1,2) | TRM-Att | Maze-Hard | `maze-seed1` | ⚠️ partial: 1 of 3 seeds, 100 epochs |
+| (2,1) | Fine-tuned LLM (Qwen) | Sudoku-Extreme | `novelty-qwen-sudoku-seed0` | ✅ done |
+| (2,2) | Fine-tuned LLM (Qwen) | Maze-Hard | — | ❌ on rig 3 |
+| (3,1) | Distilled LLM | Sudoku-Extreme | `novelty-distill-sudoku-seed0` | ✅ done |
+| (3,2) | Distilled LLM | Maze-Hard | — | ❌ on rig 3 |
+
+**3 of 6 cells filled locally.** Smoke runs are not part of the matrix.
+
+### 9.2 What each run earns in the rubric
+
+| Run | Methods (30%) | Experiments (30%) | MO4 ethics |
+|---|---|---|---|
+| `maze-seed1` | Demonstrates ACT halting (avg_steps 5.4 → 3.5) — real evidence of "alternative methods understanding" | Rise-and-collapse weakness measured — rubric rewards discussing limitations | 14.9 kWh / 3.54 kg CO₂ — concrete number for ethical-issues paragraph |
+| `novelty-qwen-sudoku-seed0` | Justifies LLM choice; reproduces proposal's premise (LLMs at 0 % puzzle) | Required LLM baseline for cell (2,1) | 0.32 kWh / 0.077 kg CO₂ — middle of the cost spectrum |
+| `novelty-distill-sudoku-seed0` | Demonstrates knowledge distillation (α=0.7, T=4) — proposal's third method | Required distilled baseline for cell (3,1); shows student > teacher on every axis | 0.011 kWh / 0.0026 kg CO₂ — cheapest cell in matrix |
+| Smoke runs ×3 | One sentence on GPT-2→Qwen switch (if interesting) | None | None |
+
+### 9.3 Headline numbers the report can quote directly
+
+- **CO₂ range across the 3 completed cells:** 0.0026 kg (distill-sudoku) → 3.54 kg (TRM-att-maze) = **~1360× ratio**. Strong sentence for the ethical-issues paragraph (rubric explicitly rewards this in the 70-100 % Methods band).
+- **Both LLM cells reproduce 0 % puzzle accuracy** — confirms proposal's quoted claim about DeepSeek R1 / Claude / o3-mini-high failing on Sudoku-Extreme.
+- **TRM-Att maze peaked at 27.5 % puzzle-acc at epoch 50, fell to 17.2 % at epoch 100** — measured rise-and-collapse, not assumed. Rubric rewards "discussing limitations".
+- **ACT halting confirmed working** in `maze-seed1` (5.4 → 3.5 steps) — direct evidence the recursion + adaptive-compute mechanism behaves as Jolicoeur-Martineau (2025) describes.
+
+### 9.4 What's missing for full proposal coverage
+
+The proposal promised three figure types. Status:
+
+- ✅ **Carbon footprint bar chart** — `results/novelty/iso_time_energy_by_model.png` exists (3 of 6 bars filled).
+- ⚠️ **Accuracy comparison table** — 3 of 6 cells. Either wait for rigs 1 + 3, or fall back to HF-ckpt eval for missing TRM cells and disclose the fallback in the table caption.
+- ❌ **Performance-by-difficulty curves** — no run stratifies by difficulty. Sudoku-Extreme is uniformly 17-clue, so this may need to be reframed as "performance vs training-budget curves" using the existing iso-time data.
+
+### 9.5 Note on `C:\ml-trm-work` and the supplementary ZIP
+
+Spec page 3: supplementary material is "a separate ZIP file" of code, and "any text … is for coding and documentation purposes only and does not directly contribute the marking of the project report". **Binary weight files earn no rubric marks.** What earns marks is the report's tables and figures, which are already fed by the lightweight metadata in `results/novelty/`. A GitHub release of `.pt` files would not move any rubric cell.
