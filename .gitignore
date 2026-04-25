@@ -7,6 +7,9 @@ experiments/**/*.csv
 experiments/**/*.json
 results/**/*.json
 results/**/*.pt
+# Light per-run summary artifacts under results/runs/ are committed; weights
+# stay on the matching GitHub Release. See results/runs/README.md.
+!results/runs/**/*.json
 .env
 # wandb_api.txt is a one-shot bootstrap: drop your wandb API key in here
 # and start.py / init_wandb auto-load it. NEVER commit. After bootstrap

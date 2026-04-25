@@ -1,0 +1,3 @@
+epoch,lm_loss,q_halt_loss,q_continue_loss,accuracy,exact_accuracy,q_halt_accuracy,avg_steps,val_cell_acc,val_puzzle_acc,best_puzzle_acc,elapsed_min
+50,0.2559,1.9681,0.0000,0.9873,0.5444,0.5717,3.9,0.9497,0.1020,0.1130,1351.2
+100,0.2409,1.9806,0.0000,0.9864,0.5544,0.5723,3.8,0.9595,0.1810,0.1810,2702.3
