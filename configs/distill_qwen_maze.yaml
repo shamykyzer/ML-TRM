@@ -1,0 +1,57 @@
+# Distill a small student from a fine-tuned Qwen2.5-0.5B teacher on Maze-Hard.
+#
+# Launch (after training the Qwen maze teacher with configs/llm_qwen_maze.yaml):
+#   python main.py --mode distill \
+#     --config configs/distill_qwen_maze.yaml --seed 0 \
+#     --checkpoint <path-to-qwen-maze-best.pt>
+#
+# Maze sequences are 30x30=900 tokens. Teacher is QLoRA-quantised so distillation
+# inference still fits in 12 GB.
+
+model:
+  model_type: llm_distill
+
+  vocab_size: 6           # maze charset (#  SGo) + 0 pad
+  seq_len: 900            # 30x30 maze flattened
+  num_classes: 6
+
+  # Teacher: Qwen2.5-0.5B + LoRA r=8, QLoRA 4-bit (matches configs/llm_qwen_maze.yaml).
+  llm_name: Qwen/Qwen2.5-0.5B
+  lora_r: 8
+  lora_alpha: 16
+  use_qlora: true
+  use_gradient_checkpointing: true
+
+  # Student (~2.4M params).
+  distill_n_layers: 3
+  distill_d_model: 256
+  distill_ff_hidden: 1024
+  distill_n_heads: 4
+
+training:
+  lr: 0.001
+  betas: [0.9, 0.999]
+  weight_decay: 0.01
+  warmup_steps: 200
+  batch_size: 8           # 900-token sequences
+  grad_accum_steps: 2     # effective batch 16
+  epochs: 30
+
+  distill_alpha: 0.7
+  distill_temperature: 4.0
+
+  use_wandb: true
+  wandb_project: TRM-LLM
+  wandb_entity: ""
+  log_interval: 10
+  save_interval: 10
+
+data:
+  dataset: maze
+  data_dir: data/maze-30x30-hard-1k-aug
+  num_workers: 4
+
+seed: 42
+device: cuda
+checkpoint_dir: models/distill_qwen_maze
+experiment_dir: experiments/distill_qwen_maze

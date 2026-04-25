@@ -1,0 +1,53 @@
+# Distill a small student from a fine-tuned GPT-2 teacher on Sudoku-Extreme.
+#
+# Launch (after training the GPT-2 sudoku teacher with configs/llm_config.yaml):
+#   python main.py --mode distill \
+#     --config configs/distill_gpt2_sudoku.yaml --seed 0 \
+#     --checkpoint <path-to-gpt2-sudoku-best.pt>
+
+model:
+  model_type: llm_distill
+
+  vocab_size: 11
+  seq_len: 81
+  num_classes: 11
+
+  # Teacher: GPT-2 base + LoRA r=8.
+  llm_name: gpt2
+  lora_r: 8
+  lora_alpha: 16
+  use_qlora: false
+
+  # Student (~2.4M params).
+  distill_n_layers: 3
+  distill_d_model: 256
+  distill_ff_hidden: 1024
+  distill_n_heads: 4
+
+training:
+  lr: 0.001
+  betas: [0.9, 0.999]
+  weight_decay: 0.01
+  warmup_steps: 200
+  batch_size: 32
+  grad_accum_steps: 1
+  epochs: 30
+
+  distill_alpha: 0.7
+  distill_temperature: 4.0
+
+  use_wandb: true
+  wandb_project: TRM-LLM
+  wandb_entity: ""
+  log_interval: 10
+  save_interval: 10
+
+data:
+  dataset: sudoku
+  data_dir: data/sudoku-extreme-full
+  num_workers: 4
+
+seed: 42
+device: cuda
+checkpoint_dir: models/distill_gpt2_sudoku
+experiment_dir: experiments/distill_gpt2_sudoku

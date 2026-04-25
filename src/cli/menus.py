@@ -472,6 +472,8 @@ def _interactive_launcher() -> None:
     print(f"  {CYAN}5{RESET}) Resume/extend   {DIM}(continue a finished or Ctrl+C'd run for N more epochs){RESET}")
     print(f"  {CYAN}6{RESET}) Fresh start     {DIM}(new run; LLM family picks run sudoku \u2192 maze back-to-back){RESET}")
     print(f"  {CYAN}7{RESET}) Novelty         {DIM}(iso-time + K-vote experiments for the report){RESET}")
+    print(f"  {DIM}-- Group Project sprint (Apr-26 plan) ---------------------------{RESET}")
+    print(f"  {CYAN}8{RESET}) Maze 50-ep      {DIM}(TRM-Att Maze HF-init fine-tune, 50 ep, 3 seeds: M1/M2/M3){RESET}")
     print(f"  {CYAN}Q{RESET}) Quit")
 
     choice = _prompt("Pick", default="Q").upper()
@@ -501,12 +503,123 @@ def _interactive_launcher() -> None:
         novelty_launcher()
         return
 
+    if choice == "8":
+        _group_project_maze_sprint()
+        return
+
     if choice in ("1", "2"):
         task, seed = _prompt_task_and_seed()
         _dispatch_training(task, seed, dry_run=(choice == "1"))
         return
 
     print(f"{YELLOW}!!! Unknown choice '{choice}'.{RESET}")
+
+
+def _group_project_maze_sprint() -> None:
+    """Group Project sprint launcher — TRM-Att Maze fine-tune, 50 epochs.
+
+    Per the Apr-26 plan: 3 maze seeds across M1/M2/M3, each running a 50-epoch
+    HF-init fine-tune with the corrected hparams from
+    ``configs/trm_official_maze_finetune.yaml`` (q_loss_weight=0.0,
+    halt_exploration_prob=0.0, lr=1e-5, weight_decay=0.1).
+
+    This is a **separate** menu entry (option 8) so it doesn't get confused
+    with the from-scratch options 2/6 — both the wall-clock budget (~6h
+    per seed) and the kill-rule (epoch-1 val_exact ≥ 0.78 or kill) are
+    documented here, not buried in the generic launcher.
+
+    Does three things in order:
+      1. Run scripts/bootstrap_hf_maze.py to verify
+         hf_checkpoints/Maze-Hard/remapped_for_local.pt exists locally
+         (idempotent — no-op if already bootstrapped).
+      2. Prompt for seed (0/1/2 — operator picks the row matching their box).
+      3. Dispatch ``main.py --mode train --config <maze_finetune> --seed N
+         --init-weights <hf-maze.pt>`` via the standard launcher so
+         TRM_CHECKPOINT_DIR / TRM_EXPERIMENT_DIR / wandb logging all flow
+         through the same plumbing as options 2/6.
+    """
+    print(f"\n{BOLD}Group Project sprint — TRM-Att Maze 50-epoch fine-tune{RESET}")
+    print(f"  {DIM}per docs/trm_3day_todo_v4.pdf + configs/trm_official_maze_finetune.yaml{RESET}\n")
+
+    print(f"{BOLD}3-seed assignment (re-run this menu on each box):{RESET}")
+    print(f"  {DIM}machine   seed   ETA{RESET}")
+    print(f"  {CYAN}M1{RESET}        {CYAN}0{RESET}      ~6h on RTX 5070")
+    print(f"  {CYAN}M2{RESET}        {CYAN}1{RESET}      ~6h")
+    print(f"  {CYAN}M3{RESET}        {CYAN}2{RESET}      ~6h")
+    print()
+    print(f"{BOLD}Kill rule (watch ~30 min in, after epoch-1 eval):{RESET}")
+    print(f"  val_exact ≥ 0.78  {GREEN}✓ let it run to epoch 50{RESET}")
+    print(f"  0.5 ≤ val < 0.78  {YELLOW}⚠ let it finish, modest gain expected{RESET}")
+    print(f"  val_exact < 0.5   {YELLOW}✗ Ctrl+C, q_loss_weight=0.0 fix didn't save it{RESET}\n")
+
+    config = "configs/trm_official_maze_finetune.yaml"
+    init_weights = "hf_checkpoints/Maze-Hard/remapped_for_local.pt"
+
+    # 1. Bootstrap HF checkpoint if missing — idempotent.
+    bootstrap = os.path.join(ROOT, "scripts", "bootstrap_hf_maze.py")
+    if os.path.exists(bootstrap):
+        print(f"{BOLD}Step 1: ensure HF Maze-Hard checkpoint is present{RESET}")
+        rc = subprocess.run([PYTHON, bootstrap], cwd=ROOT).returncode
+        if rc != 0:
+            print(f"{YELLOW}!!! bootstrap_hf_maze.py exited {rc}. Fix that, then re-run.{RESET}")
+            return
+        print()
+    else:
+        print(f"{YELLOW}!!! {bootstrap} not found — skipping bootstrap. Make sure{RESET}")
+        print(f"{YELLOW}    {init_weights} exists locally before launching.{RESET}\n")
+
+    # 2. Prompt for seed.
+    seed_str = _prompt("Seed for this machine (0 / 1 / 2)", default="0")
+    try:
+        seed = int(seed_str)
+        if seed not in (0, 1, 2):
+            raise ValueError
+    except ValueError:
+        print(f"{YELLOW}!!! Need 0, 1, or 2 (got '{seed_str}').{RESET}")
+        return
+
+    # 3. Verify the init-weights file actually landed.
+    init_path = os.path.join(ROOT, init_weights)
+    if not os.path.exists(init_path):
+        print(f"{YELLOW}!!! Missing {init_weights} — cannot launch without HF init.{RESET}")
+        print(f"{DIM}    Re-run scripts/bootstrap_hf_maze.py manually to fix.{RESET}")
+        return
+
+    # 4. Print the launch summary so the operator can sanity-check before training.
+    bar = "=" * 64
+    print(f"\n{BOLD}{bar}{RESET}")
+    print(f"  config        : {CYAN}{config}{RESET}")
+    print(f"  seed          : {CYAN}{seed}{RESET}")
+    print(f"  --init-weights: {CYAN}{init_weights}{RESET}")
+    print(f"  epochs        : {CYAN}50{RESET}  {DIM}(from config){RESET}")
+    print(f"  eval_interval : {CYAN}1{RESET}  {DIM}(catches dz3tkge9-style cliff at epoch 1){RESET}")
+    print(f"{BOLD}{bar}{RESET}\n")
+
+    confirm = _prompt("Launch? (y/n)", default="y").lower()
+    if confirm not in ("y", "yes"):
+        print(f"{DIM}Nothing launched.{RESET}")
+        return
+
+    # 5. Dispatch via the standard subprocess launcher so TRM_CHECKPOINT_DIR /
+    #    TRM_EXPERIMENT_DIR / wandb all set up identically to options 2/6.
+    args = [
+        PYTHON, "main.py",
+        "--mode", "train",
+        "--config", config,
+        "--seed", str(seed),
+        "--init-weights", init_weights,
+    ]
+    work_dir = os.environ.get("TRM_WORK_DIR") or _resolve_work_dir()
+    run_dir = os.path.join(work_dir, f"trm-att-maze-50ep-seed{seed}")
+    os.makedirs(run_dir, exist_ok=True)
+
+    env = os.environ.copy()
+    env["TRM_CHECKPOINT_DIR"] = run_dir
+    env["TRM_EXPERIMENT_DIR"] = run_dir
+
+    print(f"{DIM}Launching: {' '.join(args)}{RESET}")
+    print(f"{DIM}Run dir   : {run_dir}{RESET}\n")
+    sys.exit(_run_training_subprocess(args, env=env))
 
 
 def _print_copy_paste_commands() -> None:

@@ -1,0 +1,62 @@
+# Distill a small student from a fine-tuned Qwen2.5-0.5B teacher on Sudoku-Extreme.
+#
+# Launch:
+#   python main.py --mode distill \
+#     --config configs/distill_qwen_sudoku.yaml --seed 0 \
+#     --checkpoint <path-to-qwen-sudoku-best.pt>
+#
+# Teacher: existing Qwen2.5-0.5B sudoku LoRA checkpoint
+#   (e.g. C:/ml-trm-work/llm-qwen-sudoku-seed0/qwen2.5_0.5b_sudoku_latest.pt).
+# Student: ~2.4M-param transformer over the puzzle vocabulary (11 classes).
+
+model:
+  model_type: llm_distill
+
+  # Task vocabulary — must match the teacher's training set.
+  vocab_size: 11
+  seq_len: 81
+  num_classes: 11
+
+  # Teacher tokenizer / architecture (used by main._run_distill to rebuild the
+  # teacher from the saved config, then load the checkpoint passed via
+  # --checkpoint).
+  llm_name: Qwen/Qwen2.5-0.5B
+  lora_r: 8
+  lora_alpha: 16
+  use_qlora: false
+
+  # Student architecture (~2.4M params).
+  distill_n_layers: 3
+  distill_d_model: 256
+  distill_ff_hidden: 1024
+  distill_n_heads: 4
+
+training:
+  # Student is small and trained from scratch — typical lr is ~1e-3.
+  lr: 0.001
+  betas: [0.9, 0.999]
+  weight_decay: 0.01
+  warmup_steps: 200
+  batch_size: 32
+  grad_accum_steps: 1
+  epochs: 30
+
+  # Distillation loss weighting (defaults in src/utils/config.py).
+  distill_alpha: 0.7
+  distill_temperature: 4.0
+
+  use_wandb: true
+  wandb_project: TRM-LLM
+  wandb_entity: ""
+  log_interval: 10
+  save_interval: 10
+
+data:
+  dataset: sudoku
+  data_dir: data/sudoku-extreme-full
+  num_workers: 4
+
+seed: 42
+device: cuda
+checkpoint_dir: models/distill_qwen_sudoku
+experiment_dir: experiments/distill_qwen_sudoku
