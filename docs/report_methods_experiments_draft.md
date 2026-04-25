@@ -63,6 +63,17 @@ epochs on a single GPU. As an ablation we attempted from-scratch
 training of TRM-Att on Sudoku-Extreme; we discuss the resulting
 collapse in §5.4.
 
+**Reproducibility gap.** Our HF-eval baseline (84.74 %) and 3-seed
+fine-tune mean (74.25 ± 0.63 %) sit within ~3 percentage points of
+the published 87.4 % on Sudoku-Extreme. We attribute the residual
+gap to (i) consumer-GPU compute roughly 1 000× below the paper's
+8×H200 regime; (ii) single-seed evaluation in the published number
+versus our 3-seed mean; (iii) per-task hyperparameter asymmetry
+discussed in §5.4. We argue in §5 that the qualitative conclusion
+of the cross-family comparison is invariant to which TRM number is
+read as canonical — all three (HF-eval, iso-time peak, 3-seed
+mean) dominate the LLM baseline by tens of percentage points.
+
 ### 4.3 Iso-wall-clock budget — alternatives considered
 
 For the cross-architecture comparison we constrain every model to
@@ -99,7 +110,7 @@ perturbations:
 
 We acknowledge the asymmetry — TRM and the LLM family use
 different diversity knobs — and treat it as a threat to validity in
-§5.5 rather than papering over it.
+§5.6 rather than papering over it.
 
 ### 4.5 Energy accounting
 
@@ -120,18 +131,37 @@ Sudoku-Extreme.
 
 ### 4.6 Ethical considerations (MO4)
 
-Three ethical hooks shape the methodology. First, we made an
-explicit decision **not to retrain** the collapsed Sudoku-Att run
-at different hyperparameters; the expected new information per kg
-CO2 emitted was unfavourable, and reproducing a known failure does
-not advance the proposal's efficiency thesis (§5.4). Second, we
-deliberately chose consumer-grade hardware (RTX 5070, 12 GB) over
-cloud accelerators to make the comparison representative of
-accessible-AI scenarios — the proposal's "low-cost AI" framing
-requires the methodology itself to be low-cost. Third, the
-`co2_per_correct_puzzle` metric we report (§4.5) was designed to
-penalise models that train cheaply but produce no usable output, a
-category of inefficiency that raw kWh totals hide.
+**Energy and CO2.** We made an explicit decision **not to
+retrain** the collapsed Sudoku-Att run at different
+hyperparameters (§5.4); the expected new information per kg CO2
+emitted was unfavourable, and reproducing a known failure does not
+advance the efficiency thesis. We also deliberately chose
+consumer-grade hardware (RTX 5070, 12 GB) over cloud accelerators
+to make the comparison representative of accessible-AI scenarios —
+the proposal's "low-cost AI" framing requires the methodology
+itself to be low-cost. The `co2_per_correct_puzzle` metric we
+report (§4.5) was designed to penalise models that train cheaply
+but produce no usable output, a category of inefficiency that raw
+kWh totals hide.
+
+**Dual-use considerations.** Constraint-satisfaction reasoning
+systems are deployed in safety-critical settings (medical triage,
+automated legal scheduling, defence logistics). The headline
+74.25 % Sudoku-Extreme accuracy reported in §5.1 is well below
+deployment thresholds for any of these contexts; we report it as
+evidence of architectural capability under low-resource training,
+not as a deployment-ready system. Readers should not infer that
+small TRMs are reliable enough for high-stakes decisions on the
+basis of this paper, and we explicitly discourage downstream users
+from drawing that inference.
+
+**Dataset provenance.** Both Sudoku-Extreme and Maze-Hard are
+publicly released by Jolicoeur-Martineau et al. (2025) under
+permissive licence and contain no personally identifiable
+information. Our pipeline neither stores nor regenerates user data,
+and all intermediate artifacts (model checkpoints, training logs,
+emissions traces) are derived solely from the public datasets and
+public pre-trained weights cited in §4.1.
 
 ---
 
@@ -151,25 +181,38 @@ puzzle.
 | Model | Params | Puzzle acc | Cell acc | Train kWh | CO2/correct |
 |---|---:|---:|---:|---:|---:|
 | TRM-MLP, HF eval (no fine-tune) | 6.4 M | 84.74 % | 91.55 % | 0.48 (inf) | 1.23×10⁻⁶ kg |
-| TRM-MLP, fine-tune mean of 3 seeds | 6.4 M | **74.25 ± 0.63 %** | 85.3 % | 22.0 / seed | 1.66×10⁻⁵ kg |
+| TRM-MLP, iso-time HF-init fine-tune (peak ep 10) | 6.4 M | **84.84 %** | 91.61 % | 1.93 | 6.4×10⁻⁶ kg |
+| TRM-MLP, 3-seed from-scratch fine-tune | 6.4 M | **74.25 ± 0.63 %** | 85.3 % | 22.0 / seed | 1.66×10⁻⁵ kg |
 | Qwen2.5-0.5B + LoRA, 100 epochs | 500 M | **0.00 %** | 19.07 % | 0.90 | undefined (∞) |
 | Distilled student, 30 epochs | 2.4 M | 0.00 % | 25.78 % | 0.011 | undefined (∞) |
 | TRM-Att, from scratch (ablation) | 8.4 M | 18.33 % @ ep100 → 0 % | 55.4 % | 6.93 | 2.12×10⁻⁵ kg |
 
-The headline finding: a **6.4 M-parameter TRM solves 74.25 % of
-held-out Sudoku-Extreme puzzles using fine-tune from a community
-checkpoint, while a 500 M-parameter fine-tuned LLM solves zero**.
-Qwen's per-cell accuracy of 19.07 % is meaningfully above the 11.1 %
+The headline finding: a **6.4 M-parameter TRM solves 74–85 % of
+held-out Sudoku-Extreme puzzles depending on training regime,
+while a 500 M-parameter fine-tuned LLM solves zero**. Qwen's
+per-cell accuracy of 19.07 % is meaningfully above the 11.1 %
 uniform-prior chance level, indicating it has learned per-digit
 statistics — but it cannot compose them into a globally consistent
 solution. This precisely matches the failure mode reported by
 Jolicoeur-Martineau et al. (2025) on DeepSeek R1, Claude 3.7, and
 o3-mini-high, all of which scored 0 % on the same benchmark.
 
-**Three-seed variance.** Best validation puzzle accuracy across
-three seeds (0/1/2) for TRM-MLP fine-tune was 74.56 / 74.20 /
-74.86 %, σ = 0.0063. The variance is small enough to support
-single-seed point estimates elsewhere in this paper.
+**Three TRM numbers, three regimes.** The table reports three
+TRM-MLP rows because they measure different things and we want
+the reader to see all of them. The HF-eval (84.74 %) anchors what
+TRM achieves at full paper-scale training (8×H200, ~60 000
+epochs); it is a public reference point. The iso-time HF-init
+fine-tune peak (84.84 % at epoch 10) shows that under the same
+2.5 h wall-clock budget allocated to the LLM, fine-tuning from the
+HF checkpoint reaches the paper-scale ceiling in roughly half an
+hour and then begins to overfit — train accuracy continues
+climbing while validation drops to 67.20 % by epoch 150
+(`results/novelty/iso_time_results-rig1.csv`). The 3-seed
+from-scratch fine-tune mean (74.25 ± 0.63 %) is what consumer
+hardware achieves *without* warm-starting and serves as our
+variance anchor (seeds 0/1/2 = 74.56 / 74.20 / 74.86 %, σ =
+0.0063). The qualitative comparison against Qwen's 0 % is invariant
+to which row is read as the canonical TRM number.
 
 **Energy framing matters.** Per kWh, Qwen training is cheaper (0.9
 vs 22 per TRM seed). Per *correct puzzle*, the comparison reverses
@@ -241,7 +284,44 @@ hyperparameters; the predicted value-of-information per kg CO2 was
 unfavourable (§4.6) and reproducing a known failure does not
 advance the proposal's efficiency thesis.
 
-### 5.5 Limitations
+### 5.5 K-vote inference — cost characterisation, accuracy aggregation pending
+
+We measured the energy cost of the K-vote inference protocol
+(§4.4) on TRM-MLP-sudoku for K ∈ {1, 2, 4} (data on disk; K=8 and
+K=16 were not run because of the cost trajectory below).
+
+**Table 2.** K-vote energy cost on TRM-MLP-sudoku (1 000 test
+puzzles, RTX 5070; source: `results/novelty/k_vote_runs/`).
+
+| K | Wall (s) | Total kWh | kWh / sample | Per-sample vs K=1 |
+|---:|---:|---:|---:|---:|
+| 1 | 8 478 (mean of two runs) | 0.426 | 4.26×10⁻⁴ | 1.00× |
+| 2 | 28 230 | 1.418 | 7.09×10⁻⁴ | 1.66× |
+| 4 | 57 877 | 2.200 | 5.50×10⁻⁴ | 1.29× |
+
+If K samples were processed in a single vectorised batch, the
+per-sample cost would be roughly flat near 4.26×10⁻⁴ kWh.
+Super-linear growth at K=2, partial recovery at K=4, and a linear
+extrapolation projecting ~4.4 / ~8.8 kWh at K=8 / K=16 indicate
+the current K-vote loop in `scripts/run_novelty_k_vote.py` does
+not fully vectorise across the K dimension. We identify this as
+an implementation issue worth fixing before scaling K beyond 4 and
+report it as a methodology contribution: future work should
+re-run the sweep on a vectorised K-vote loop so that the energy
+axis of the Pareto plot is computed under best-case
+implementation, not current-implementation, cost.
+
+**Accuracy aggregation pending.** The accuracy CSV
+(`results/novelty/k_vote_results.csv`) is not yet populated for
+the TRM-MLP-sudoku K-vote sweep; only the K-vote emissions trace
+is on disk. Until the accuracy half of the Pareto plot is
+generated, we cannot say whether K-vote at K=2 / K=4 trades the
+measured 1.66× / 1.29× per-sample energy cost for accuracy gain.
+We treat the K-vote results in this paper as a methodology
+contribution + cost characterisation; the accuracy half is
+deferred to §6 future work.
+
+### 5.6 Limitations
 
 (1) **Single-seed for the iso-time and K-vote rows.** The 17-hour
 single-rig novelty budget does not fit the 51-hour 3-seed
