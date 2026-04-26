@@ -473,7 +473,7 @@ def _interactive_launcher() -> None:
     print(f"  {CYAN}6{RESET}) Fresh start     {DIM}(new run; LLM family picks run sudoku \u2192 maze back-to-back){RESET}")
     print(f"  {CYAN}7{RESET}) Novelty         {DIM}(iso-time + K-vote experiments for the report){RESET}")
     print(f"  {DIM}-- Group Project sprint (Apr-26 plan) ---------------------------{RESET}")
-    print(f"  {CYAN}8{RESET}) Maze 50-ep      {DIM}(TRM-Att Maze HF-init fine-tune, 50 ep, 3 seeds: M1/M2/M3){RESET}")
+    print(f"  {CYAN}8{RESET}) Maze 100-ep     {DIM}(TRM-Att Maze HF-init fine-tune, 100 ep, 3 seeds: M1/M2/M3){RESET}")
     print(f"  {CYAN}Q{RESET}) Quit")
 
     choice = _prompt("Pick", default="Q").upper()
@@ -516,9 +516,9 @@ def _interactive_launcher() -> None:
 
 
 def _group_project_maze_sprint() -> None:
-    """Group Project sprint launcher — TRM-Att Maze fine-tune, 50 epochs.
+    """Group Project sprint launcher — TRM-Att Maze fine-tune, 100 epochs.
 
-    Per the Apr-26 plan: 3 maze seeds across M1/M2/M3, each running a 50-epoch
+    Per the Apr-26 plan: 3 maze seeds across M1/M2/M3, each running a 100-epoch
     HF-init fine-tune with the corrected hparams from
     ``configs/trm_official_maze_finetune.yaml`` (q_loss_weight=0.0,
     halt_exploration_prob=0.0, lr=1e-5, weight_decay=0.1).
@@ -526,7 +526,9 @@ def _group_project_maze_sprint() -> None:
     This is a **separate** menu entry (option 8) so it doesn't get confused
     with the from-scratch options 2/6 — both the wall-clock budget (~6h
     per seed) and the kill-rule (epoch-1 val_exact ≥ 0.78 or kill) are
-    documented here, not buried in the generic launcher.
+    documented here, not buried in the generic launcher. Wandb metrics flush
+    every 5 epochs (log_interval=5) so the operator can monitor live; eval
+    runs every epoch (eval_interval=1) so regression alerts fire fast.
 
     Does three things in order:
       1. Run scripts/bootstrap_hf_maze.py to verify
@@ -538,17 +540,17 @@ def _group_project_maze_sprint() -> None:
          TRM_CHECKPOINT_DIR / TRM_EXPERIMENT_DIR / wandb logging all flow
          through the same plumbing as options 2/6.
     """
-    print(f"\n{BOLD}Group Project sprint — TRM-Att Maze 50-epoch fine-tune{RESET}")
+    print(f"\n{BOLD}Group Project sprint — TRM-Att Maze 100-epoch fine-tune{RESET}")
     print(f"  {DIM}per docs/trm_3day_todo_v4.pdf + configs/trm_official_maze_finetune.yaml{RESET}\n")
 
     print(f"{BOLD}3-seed assignment (re-run this menu on each box):{RESET}")
     print(f"  {DIM}machine   seed   ETA{RESET}")
-    print(f"  {CYAN}M1{RESET}        {CYAN}0{RESET}      ~6h on RTX 5070")
+    print(f"  {CYAN}M1{RESET}        {CYAN}0{RESET}      ~12h on RTX 5070")
     print(f"  {CYAN}M2{RESET}        {CYAN}1{RESET}      ~6h")
     print(f"  {CYAN}M3{RESET}        {CYAN}2{RESET}      ~6h")
     print()
-    print(f"{BOLD}Kill rule (watch ~30 min in, after epoch-1 eval):{RESET}")
-    print(f"  val_exact ≥ 0.78  {GREEN}✓ let it run to epoch 50{RESET}")
+    print(f"{BOLD}Kill rule (watch ~35 min in, after epoch-5 eval):{RESET}")
+    print(f"  val_exact ≥ 0.78  {GREEN}✓ let it run to epoch 100 (regression alert auto-halts on -3pp drop){RESET}")
     print(f"  0.5 ≤ val < 0.78  {YELLOW}⚠ let it finish, modest gain expected{RESET}")
     print(f"  val_exact < 0.5   {YELLOW}✗ Ctrl+C, q_loss_weight=0.0 fix didn't save it{RESET}\n")
 
@@ -591,8 +593,10 @@ def _group_project_maze_sprint() -> None:
     print(f"  config        : {CYAN}{config}{RESET}")
     print(f"  seed          : {CYAN}{seed}{RESET}")
     print(f"  --init-weights: {CYAN}{init_weights}{RESET}")
-    print(f"  epochs        : {CYAN}50{RESET}  {DIM}(from config){RESET}")
-    print(f"  eval_interval : {CYAN}1{RESET}  {DIM}(catches dz3tkge9-style cliff at epoch 1){RESET}")
+    print(f"  epochs        : {CYAN}100{RESET}  {DIM}(from config){RESET}")
+    print(f"  eval_interval : {CYAN}5{RESET}  {DIM}(every 5 epochs — first eval ~35 min in){RESET}")
+    print(f"  log_interval  : {CYAN}5{RESET}  {DIM}(wandb metrics flush every 5 epochs){RESET}")
+    print(f"  save_interval : {CYAN}5{RESET}  {DIM}(every saved best.pt has val metrics){RESET}")
     print(f"{BOLD}{bar}{RESET}\n")
 
     confirm = _prompt("Launch? (y/n)", default="y").lower()

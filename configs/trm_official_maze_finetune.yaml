@@ -32,9 +32,10 @@ training:
   # Short warmup — the checkpoint is already well-conditioned.
   warmup_steps: 200
   batch_size: 8
-  # 50-epoch fine-tune budget (Group Project sprint — was 25, doubled to give
-  # the regression-alert mechanism more headroom to pin the val peak).
-  epochs: 50
+  # 100-epoch fine-tune budget (Group Project sprint — bumped from 50 to give
+  # the eval_interval=1 + Weave regression-alert mechanism a long enough
+  # window to pin the val peak; alert auto-halts on regression > 0.03).
+  epochs: 100
   ema_decay: 0.999
   max_grad_norm: 1.0
 
@@ -50,10 +51,14 @@ training:
   use_wandb: true
   wandb_project: TRM
   wandb_entity: ""
-  log_interval: 10
-  # Eval every epoch so we catch dz3tkge9-style corruption (val cliff at warmup
-  # end) within the first ~30 min instead of only at epoch 10/20.
-  eval_interval: 1
+  # Every 5 epochs: train metrics flushed to wandb (matches save_interval=5
+  # so a wandb-logged epoch always has a corresponding checkpoint on disk).
+  log_interval: 5
+  # Eval every 5 epochs (was 1). With 100 ep + ~2 min per eval, saves ~2.7h
+  # of overhead per seed vs eval_interval=1, at the cost of detecting any
+  # dz3tkge9-style cliff at epoch 5 instead of epoch 1 (~35 min later).
+  # save_interval matches so every saved best.pt has corresponding val metrics.
+  eval_interval: 5
   save_interval: 5
   hf_repo_id: ""
 
