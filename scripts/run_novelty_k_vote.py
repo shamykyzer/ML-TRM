@@ -143,7 +143,11 @@ def _build_trm(config: ExperimentConfig, ckpt: dict, device: str):
     forward_dtype = getattr(torch, config.model.forward_dtype, torch.bfloat16)
     model.to(device=device, dtype=forward_dtype)
     loss_head.to(device=device, dtype=forward_dtype)
-    model.load_state_dict(ckpt["model_state_dict"])
+    # strict=False: rotary_emb.{inv_freq,cos_cached,sin_cached} are register_buffer
+    # values computed deterministically at module __init__ from the architecture
+    # config — Sanjin's HF checkpoint and our remapped_for_local.pt both omit
+    # them. Same handling as trainer_official._load_init_weights.
+    model.load_state_dict(ckpt["model_state_dict"], strict=False)
     return model, loss_head
 
 
