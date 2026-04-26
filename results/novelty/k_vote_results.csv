@@ -1,0 +1,4 @@
+label,task,model,k,puzzle_acc,cell_acc,mean_latency_ms,kwh_per_puzzle,n_puzzles,checkpoint_path
+trm-att-maze,maze,trm-att,1,0.7960,0.9754,122.769,0.00000720,1000,C:\ml-trm-work\novelty-trm-att-maze-seed1\latest.pt
+trm-att-maze,maze,trm-att,2,0.7940,0.9753,239.248,0.00001500,1000,C:\ml-trm-work\novelty-trm-att-maze-seed1\latest.pt
+trm-att-maze,maze,trm-att,4,0.7960,0.9754,472.941,0.00003012,1000,C:\ml-trm-work\novelty-trm-att-maze-seed1\latest.pt
