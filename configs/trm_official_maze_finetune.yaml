@@ -29,8 +29,12 @@ training:
   lr: 0.00001
   betas: [0.9, 0.95]
   weight_decay: 0.1
-  # Short warmup — the checkpoint is already well-conditioned.
-  warmup_steps: 200
+  # Longer warmup (was 200) to smooth out the adam_atan2/AdamW cold-start
+  # corner: at step 1 with m_0=v_0=0, bias correction yields ‖update‖≈π/4·lr
+  # for *every* parameter — a max-direction nudge on a converged init.
+  # Stretching warmup over 500 steps reduces per-step magnitude during the
+  # cold phase and gives Adam moments time to stabilise before peak lr.
+  warmup_steps: 500
   batch_size: 8
   # 100-epoch fine-tune budget (Group Project sprint — bumped from 50 to give
   # the eval_interval=1 + Weave regression-alert mechanism a long enough
@@ -39,7 +43,17 @@ training:
   ema_decay: 0.999
   max_grad_norm: 1.0
 
-  optimizer: adam_atan2
+  # Switched from adam_atan2 → adamw for fine-tuning a converged HF init.
+  # adam_atan2's update is `atan2(m, sqrt(v))` — direction-only, magnitude
+  # bounded by π/2·lr regardless of gradient magnitude. At a flat minimum
+  # ‖g‖→0 but adam_atan2 still random-walks at ~lr·π/2 per step in noise
+  # directions. Diagnosed in M3 seed-2 run as the load-bearing cause of the
+  # 0.7960 → 0.000 puzzle_acc collapse in epoch 1. AdamW's `m/(√v+ε)` damps
+  # naturally as the gradient vanishes, so the model stays in the HF basin.
+  # This is paper-faithful for *from-scratch* training but wrong for
+  # fine-tuning; trainer_official.py:_build_optimizer falls through to AdamW
+  # for any string other than "adam_atan2".
+  optimizer: adamw
   task_emb_lr: 0.00001
   task_emb_weight_decay: 0.1
   # 0.0 freezes the Q-head gradient contribution. Combined with
@@ -51,15 +65,18 @@ training:
   use_wandb: true
   wandb_project: TRM
   wandb_entity: ""
-  # Every 5 epochs: train metrics flushed to wandb (matches save_interval=5
+  # Every 20 epochs: train metrics flushed to wandb (matches save_interval=20
   # so a wandb-logged epoch always has a corresponding checkpoint on disk).
-  log_interval: 5
-  # Eval every 5 epochs (was 1). With 100 ep + ~2 min per eval, saves ~2.7h
-  # of overhead per seed vs eval_interval=1, at the cost of detecting any
-  # dz3tkge9-style cliff at epoch 5 instead of epoch 1 (~35 min later).
+  log_interval: 20
+  # Eval every 20 epochs (was 5). M3 measured ~2 min per eval at batch 16; with
+  # 100 ep this drops eval overhead from ~21 evals × 2 min ≈ 42 min to ~5 evals
+  # × 2 min ≈ 10 min, freeing ~32 min per seed. Trade-off: KILL RULE check
+  # moves from epoch 5 (~35 min in) to epoch 20 (~9 h in at observed pace) —
+  # so a dz3tkge9/seed-2-style cliff burns substantially more GPU before it's
+  # caught. Worth it on seeds we trust; risky on seeds with a known failure mode.
   # save_interval matches so every saved best.pt has corresponding val metrics.
-  eval_interval: 5
-  save_interval: 5
+  eval_interval: 20
+  save_interval: 20
   hf_repo_id: ""
 
   rolling_checkpoint_dir: ""
