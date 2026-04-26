@@ -623,7 +623,7 @@ def _group_project_maze_sprint() -> None:
 
     print(f"{DIM}Launching: {' '.join(args)}{RESET}")
     print(f"{DIM}Run dir   : {run_dir}{RESET}\n")
-    sys.exit(_run_training_subprocess(args, env=env))
+    sys.exit(subprocess.run(args, env=env).returncode)
 
 
 def _print_copy_paste_commands() -> None:
