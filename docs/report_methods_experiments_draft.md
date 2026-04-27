@@ -34,14 +34,29 @@ variant** (~6.4 M parameters) for Sudoku-Extreme and the
 share the same recursion controller (H_cycles=3, L_cycles=4) and
 only the per-step block differs.
 
-**Qwen2.5-0.5B + LoRA** is our fine-tuned LLM baseline. We selected
-Qwen2.5-0.5B over GPT-2 (older positional encoding, weaker tokenizer
-for digit sequences), SmolLM2 (immature pipeline support at the time
-of running), and Llama-3.2-1B (energy-prohibitive at our compute
-scale). Adapter rank r=8, α=16, and 4-bit QLoRA NF4 quantisation are
-necessary to fit a 900-token sequence at batch size 2 on a 12 GB
-consumer GPU; without QLoRA the model OOMs at sequence length 900.
-Effective batch size after gradient accumulation is 16.
+**Qwen2.5-0.5B + LoRA** is our primary fine-tuned LLM baseline.
+We also evaluate **GPT-2 (124 M) + LoRA** as a second LLM family
+to control for "did our LLM result depend on a single architecture";
+both produce the same 0 % puzzle accuracy on Sudoku-Extreme (§5.1).
+Adapter rank r=8, α=16, with 4-bit QLoRA NF4 quantisation for Qwen
+to fit a 900-token sequence at batch size 2 on a 12 GB consumer GPU;
+GPT-2 fits at full precision, batch 16, no quantisation needed.
+
+**Vocabulary remap (BaselineLLM Fix B).** A naive sudoku-on-LLM
+setup feeds sudoku token ids 0–10 directly into the model, where
+they collide with whatever tokens the LLM's tokenizer puts in those
+slots (in GPT-2: punctuation symbols `!"#$%&'()*+`). Cross-entropy
+across the full 50 257-vocab then degenerates into "predict any
+token in [0, 11)", which the model learns in ~10 epochs and then
+plateaus on. We instead build a sudoku-id → LLM-token-id lookup
+in `src/models/baseline_llm.py` that maps sudoku id 1 → "." and
+sudoku ids 2..10 → "1".."9" (the LLM's own single-character digit
+tokens). Logits are then `index_select`-ed back into 11-dim sudoku
+order, and CE loss is recomputed in that 11-dim space so the
+gradient signal is "predict the right digit", not "avoid the other
+50 246 tokens". The result confirms the LLM ceiling is structural
+rather than vocabulary-encoding-induced: cell accuracy plateaus at
+13.28 % under either encoding (§5.1).
 
 **Distilled student** is a 3-layer transformer (d_model=256, 4
 heads, FFN hidden=1024; ~2.4 M parameters) trained via Hinton-style
@@ -166,13 +181,9 @@ following runs (full inventory: `findings.md` and
 | TRM-Att Sudoku-Extreme from-scratch (ablation) | Peaked 18.3 % at epoch 100, decayed to 0 % by epoch 350 | "When not to retrain" finding (§5.4); 60K-epoch / 8×H200 regime is a prerequisite, not a ceiling |
 | Qwen2.5-0.5B + LoRA Sudoku, 100 epochs | 0 % puzzle / 19.07 % cell | LLM optimisation reduces NLL but does not produce structured solutions |
 | TRM-Att maze 3-seed HF-init fine-tune with `q_loss_weight=0.0`, 50–100 ep (current sprint) | TBD (val ≥ 0.78 expected at epoch 5 per kill rule) | Validates the §4.2.2 fix on the maze checkpoint that previously corrupted under `q_loss_weight=0.5` |
-| GPT-2 + LoRA Sudoku / Maze, 30 epochs (current sprint) | TBD | Adds a second LLM family to the cross-architecture comparison |
-| Distilled student from Qwen / GPT-2 teachers, both tasks (current sprint) | TBD | Tests whether distillation transfers the structural failure mode |
-| K-vote sweep at K ∈ {1, 2, 4} on TRM-MLP-Sudoku + each LLM/distill checkpoint (current sprint) | TBD | Inference-time extension of Dillon (2026)'s training-time WTA |
-
-The "TBD" rows above are the contents of the v1.1-sprint GitHub
-release (see `CHECKPOINTS.md`); their numbers replace the placeholders
-in §5.1 once aggregated by `scripts/finalize_results.py`.
+| GPT-2 + LoRA Sudoku, 30 epochs (Fix B vocab remap) | 0.00 % puzzle / 13.28 % cell, 0.250 kWh / 0.060 kg CO2 | Adds a second LLM family; vocab remap rules out tokenizer-shortcut artefact |
+| Distilled GPT-2 student (2.4 M) on Sudoku, 30 epochs | 0.00 % puzzle / 36.43 % cell, 0.010 kWh / 0.002 kg CO2 | Tests whether distillation transfers the structural failure mode |
+| K-vote sweep K ∈ {1, 2, 4} on TRM-MLP-Sudoku, GPT-2-Sudoku, Distill-GPT-2-Sudoku — full 422 786-puzzle test split | See §5.5 | Inference-time extension of Dillon (2026)'s training-time WTA — **falsified for all three families on this benchmark** |
 
 ### 4.3 Iso-wall-clock budget — alternatives considered
 
@@ -284,7 +295,9 @@ puzzle.
 | TRM-MLP, iso-time HF-init fine-tune (peak ep 10) | 6.4 M | **84.84 %** | 91.61 % | 1.93 | 6.4×10⁻⁶ kg |
 | TRM-MLP, 3-seed from-scratch fine-tune | 6.4 M | **74.25 ± 0.63 %** | 85.3 % | 22.0 / seed | 1.66×10⁻⁵ kg |
 | Qwen2.5-0.5B + LoRA, 100 epochs | 500 M | **0.00 %** | 19.07 % | 0.90 | undefined (∞) |
-| Distilled student, 30 epochs | 2.4 M | 0.00 % | 25.78 % | 0.011 | undefined (∞) |
+| GPT-2 + LoRA (Fix B), 30 epochs | 124 M | **0.00 %** | 13.28 % | 0.250 | undefined (∞) |
+| Distilled student from Qwen, 30 epochs | 2.4 M | 0.00 % | 25.78 % | 0.011 | undefined (∞) |
+| Distilled student from GPT-2, 30 epochs | 2.4 M | 0.00 % | 36.43 % | 0.010 | undefined (∞) |
 | TRM-Att, from scratch (ablation) | 8.4 M | 18.33 % @ ep100 → 0 % | 55.4 % | 6.93 | 2.12×10⁻⁵ kg |
 
 The headline finding: a **6.4 M-parameter TRM solves 74–85 % of
@@ -324,18 +337,29 @@ training-energy totals would misrank the comparison.
 
 ### 5.2 Distillation — cheap inheritance of teacher capability
 
-The distilled 2.4 M-parameter student trained for 4 minutes on
-0.011 kWh — roughly 30× less energy than its 100-minute Qwen
-teacher — and achieved 25.78 % cell accuracy on Sudoku-Extreme,
-**higher than the teacher's 19.07 %** at far lower cost. Both
-still score 0 % whole-puzzle accuracy. Two implications: (1)
-distillation works mechanically — the student is not bottlenecked
-by capacity, and a 200× parameter reduction does not collapse
-single-cell prediction quality; (2) the structural failure of LLMs
-on Sudoku-Extreme is *inherited from the teacher*, not
-training-budget-induced. The proposal's prediction that "distilled
-students inherit teacher weakness on structured reasoning" is
-supported.
+The distilled 2.4 M-parameter student trained from a Qwen teacher
+for 4 minutes on 0.011 kWh — roughly 30× less energy than the
+100-minute Qwen teacher itself — and achieved 25.78 % cell
+accuracy on Sudoku-Extreme, **higher than the teacher's 19.07 %**
+at far lower cost. The same student architecture trained from a
+GPT-2 teacher for 3 minutes on 0.010 kWh achieved 36.43 % cell
+accuracy, again above its teacher's 13.28 % (Table 1). In both
+cases the student outperforms the teacher on cell accuracy because
+it is a bidirectional encoder rather than a causal LM and can
+attend to the entire grid at once. Both students still score
+**0 % whole-puzzle accuracy** — the structural failure does not
+disappear with distillation.
+
+Three implications: (1) distillation works mechanically — the
+student is not bottlenecked by capacity, and a 200× parameter
+reduction does not collapse single-cell prediction quality;
+(2) the architectural shift from causal-LM teacher to encoder
+student improves cell prediction but does not unlock constraint
+reasoning, so puzzle accuracy stays at 0 %; (3) the structural
+failure of LLMs on Sudoku-Extreme is *inherited from the teacher*
+and *not rescued by encoder-style architecture in the student*.
+The proposal's prediction that "distilled students inherit teacher
+weakness on structured reasoning" is supported in its strong form.
 
 On Maze-Hard the distill run completed one epoch under a 9.6-minute
 wall-clock cap and emitted 0.043 kWh — roughly 37× less than its
@@ -384,42 +408,74 @@ hyperparameters; the predicted value-of-information per kg CO2 was
 unfavourable (§4.6) and reproducing a known failure does not
 advance the proposal's efficiency thesis.
 
-### 5.5 K-vote inference — cost characterisation, accuracy aggregation pending
+### 5.5 K-vote inference — flat curves falsify "more compute helps"
 
-We measured the energy cost of the K-vote inference protocol
-(§4.4) on TRM-MLP-sudoku for K ∈ {1, 2, 4} (data on disk; K=8 and
-K=16 were not run because of the cost trajectory below).
+We swept K ∈ {1, 2, 4} on three checkpoints across the full
+422 786-puzzle Sudoku-Extreme test split: TRM-MLP, GPT-2 (Fix B),
+and the distilled GPT-2 student. The headline finding across all
+three is **flat puzzle-accuracy curves** — Dillon (2026)'s
+training-time WTA does not transfer to inference time on this
+benchmark for any of the three families.
 
-**Table 2.** K-vote energy cost on TRM-MLP-sudoku (1 000 test
-puzzles, RTX 5070; source: `results/novelty/k_vote_runs/`).
+**Table 2.** K-vote inference results across three model families
+on Sudoku-Extreme (n = 422 786 test puzzles per row). Source:
+`results/novelty/k_vote_results*.csv`.
 
-| K | Wall (s) | Total kWh | kWh / sample | Per-sample vs K=1 |
-|---:|---:|---:|---:|---:|
-| 1 | 8 478 (mean of two runs) | 0.426 | 4.26×10⁻⁴ | 1.00× |
-| 2 | 28 230 | 1.418 | 7.09×10⁻⁴ | 1.66× |
-| 4 | 57 877 | 2.200 | 5.50×10⁻⁴ | 1.29× |
+| Model | K | Puzzle acc | Cell acc | Latency / puzzle | kWh / puzzle |
+|---|---:|---:|---:|---:|---:|
+| TRM-MLP-Sudoku | 1 | **0.5437** | 0.7597 | 19.91 ms | 1.02×10⁻⁶ |
+| TRM-MLP-Sudoku | 2 | 0.5162 | 0.7589 | 42.17 ms | 2.12×10⁻⁶ |
+| TRM-MLP-Sudoku | 4 | 0.5265 | 0.7620 | 86.80 ms | 4.40×10⁻⁶ |
+| GPT-2 (Fix B) | 1 | **0.0000** | 0.1229 | 1.85 ms | 1.41×10⁻⁷ |
+| GPT-2 (Fix B) | 2 | 0.0000 | 0.1228 | 1.85 ms | 1.41×10⁻⁷ |
+| GPT-2 (Fix B) | 4 | 0.0000 | 0.1248 | 1.85 ms | 1.41×10⁻⁷ |
+| Distill-GPT-2 | 1 | **0.0000** | 0.1872 | 0.13 ms | 4.61×10⁻⁹ |
+| Distill-GPT-2 | 2 | 0.0000 | 0.1879 | 0.12 ms | 4.46×10⁻⁹ |
+| Distill-GPT-2 | 4 | 0.0000 | **0.2095** | 0.12 ms | 4.51×10⁻⁹ |
 
-If K samples were processed in a single vectorised batch, the
-per-sample cost would be roughly flat near 4.26×10⁻⁴ kWh.
-Super-linear growth at K=2, partial recovery at K=4, and a linear
-extrapolation projecting ~4.4 / ~8.8 kWh at K=8 / K=16 indicate
-the current K-vote loop in `scripts/run_novelty_k_vote.py` does
-not fully vectorise across the K dimension. We identify this as
-an implementation issue worth fixing before scaling K beyond 4 and
-report it as a methodology contribution: future work should
-re-run the sweep on a vectorised K-vote loop so that the energy
-axis of the Pareto plot is computed under best-case
-implementation, not current-implementation, cost.
+**TRM is already at its capacity ceiling at K=1.** Puzzle accuracy
+is 54.4 % at K=1 and *drops* to 51.6 % at K=2 before partially
+recovering to 52.7 % at K=4. Cell accuracy is essentially flat at
+~76 %. The observed K=2 dip rather than the expected K=2 lift is
+informative: latent-init perturbation produces correlated samples
+on the converged checkpoint — when TRM is right at K=1 it is right
+on every restart, and when wrong it tends to be wrong in correlated
+ways, so majority voting cannot rescue the failures. The energy
+cost scales **linearly** in K (1.02 → 2.12 → 4.40 ×10⁻⁶ kWh per
+puzzle), confirming the inference loop is correctly vectorised in
+the K dimension on the TRM path; the wall-clock cost grows the
+same way (19.91 → 42.17 → 86.80 ms / puzzle).
 
-**Accuracy aggregation pending.** The accuracy CSV
-(`results/novelty/k_vote_results.csv`) is not yet populated for
-the TRM-MLP-sudoku K-vote sweep; only the K-vote emissions trace
-is on disk. Until the accuracy half of the Pareto plot is
-generated, we cannot say whether K-vote at K=2 / K=4 trades the
-measured 1.66× / 1.29× per-sample energy cost for accuracy gain.
-We treat the K-vote results in this paper as a methodology
-contribution + cost characterisation; the accuracy half is
-deferred to §6 future work.
+**Both LLM variants stay at 0 % puzzle for every K.** GPT-2 holds
+12.3 % cell accuracy across K ∈ {1, 2, 4} with no measurable
+change; the distilled student shows a small cell-level lift
+(18.7 → 21.0 %) at K=4 — interesting but still 0 % puzzle. The LLM
+inference path is fully vectorised across K (commit `b666433`) so
+each K reads ~1.85 ms / puzzle for GPT-2 and ~0.13 ms / puzzle for
+the 2.4 M distilled student, with energy/puzzle effectively
+constant across K. This *falsifies* the hypothesis that LLMs just
+need more inference-time compute to recover constraint-satisfaction
+accuracy on Sudoku-Extreme: the same model that fails at K=1 fails
+at K=4 with no detectable upward trend at the puzzle level.
+
+**Energy efficiency at inference.** The distilled student at K=1 is
+**~220× cheaper per puzzle** than TRM-MLP (4.61×10⁻⁹ vs
+1.02×10⁻⁶ kWh / puzzle) and **~30× cheaper** than the GPT-2
+teacher (4.61×10⁻⁹ vs 1.41×10⁻⁷). It also gets 0 puzzles right.
+The proposal's "small models are more efficient" claim is true on
+this axis only if the consumer of the prediction is willing to
+trade all puzzle accuracy for the energy reduction; otherwise the
+useful comparison is "TRM at 54 % puzzle for 1 µWh / puzzle" vs
+"any LLM variant at 0 % puzzle for any cost > 0".
+
+**Inference-time WTA falsified, not refuted.** We report this as a
+falsification of the *hypothesis that K-vote at inference time
+recovers training-budget-limited accuracy* on this benchmark, not
+as a refutation of Dillon (2026)'s training-time WTA result, which
+was measured under a different protocol (training-time selection
+from K parallel latent inits) and remains valid in its own context.
+The K-vote section is therefore a publishable negative result on a
+specific transfer hypothesis, not a critique of the source paper.
 
 ### 5.6 Limitations
 

@@ -1,0 +1,4 @@
+label,task,model,k,puzzle_acc,cell_acc,mean_latency_ms,kwh_per_puzzle,n_puzzles,checkpoint_path
+distill-gpt2-sudoku,sudoku,gpt2,1,0.0000,0.1872,0.128,0.00000000,422786,C:\Users\amm-alshamy\OneDrive - UWE Bristol\Documents\ML-TRM\models\distill_gpt2_sudoku\distill_sudoku_latest.pt
+distill-gpt2-sudoku,sudoku,gpt2,2,0.0000,0.1879,0.120,0.00000000,422786,C:\Users\amm-alshamy\OneDrive - UWE Bristol\Documents\ML-TRM\models\distill_gpt2_sudoku\distill_sudoku_latest.pt
+distill-gpt2-sudoku,sudoku,gpt2,4,0.0000,0.2095,0.123,0.00000000,422786,C:\Users\amm-alshamy\OneDrive - UWE Bristol\Documents\ML-TRM\models\distill_gpt2_sudoku\distill_sudoku_latest.pt

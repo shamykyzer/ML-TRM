@@ -1,0 +1,4 @@
+label,task,model,k,puzzle_acc,cell_acc,mean_latency_ms,kwh_per_puzzle,n_puzzles,checkpoint_path
+gpt2-sudoku,sudoku,gpt2,1,0.0000,0.1229,1.850,0.00000014,422786,C:\Users\amm-alshamy\OneDrive - UWE Bristol\Documents\ML-TRM\models\llm\gpt2_sudoku_latest.pt
+gpt2-sudoku,sudoku,gpt2,2,0.0000,0.1228,1.849,0.00000014,422786,C:\Users\amm-alshamy\OneDrive - UWE Bristol\Documents\ML-TRM\models\llm\gpt2_sudoku_latest.pt
+gpt2-sudoku,sudoku,gpt2,4,0.0000,0.1248,1.851,0.00000014,422786,C:\Users\amm-alshamy\OneDrive - UWE Bristol\Documents\ML-TRM\models\llm\gpt2_sudoku_latest.pt
