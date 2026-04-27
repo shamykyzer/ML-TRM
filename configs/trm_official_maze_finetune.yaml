@@ -59,7 +59,7 @@ training:
   # 0.0 freezes the Q-head gradient contribution. Combined with
   # halt_exploration_prob=0.0, the halting policy stays at its pretrained
   # calibration (avg_steps ≈ 16) so val puzzle_acc isn't tanked by premature halts.
-  q_loss_weight: 0.0
+  q_loss_weight: 0.5
   task_id: 1
 
   use_wandb: true
