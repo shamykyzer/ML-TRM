@@ -768,6 +768,74 @@ sets up a clean future-work direction.
 
 ---
 
+## 8. M1 sprint (2026-04-28) — maze eval-mask fix + post-fix re-evals
+
+**Author:** M1 agent (autonomous, under sprint_brief_maze_eval_fix_2026-04-27 v2 + sprint_layer_final_2026-04-28).
+**Date:** 2026-04-28 ~00:25–00:31 BST.
+**Goal:** apply the `mask_non_path: false` fix fleet-wide and re-evaluate the saturated Maze LLM/distill checkpoints under the all-cell metric.
+
+### 8.1 Dataset contamination check (Step A.1)
+
+Wrote `scripts/check_maze_split_contamination.py` (sha256 hash per puzzle row, set-overlap test). Result:
+
+```
+maze-30x30-hard-1k-aug:  train=8000  test=1000  overlap=0  -> CLEAN
+maze-30x30-hard-1k:      train=1000  test=1000  overlap=0  -> CLEAN
+```
+
+**Cause A2 (dataset contamination) is ruled out fleet-wide.** Only Cause A1 (eval-mask bug) needs fixing. No LLM maze retrain is required for contamination reasons; under Contract B §B.8 only suspect rows trigger retrains.
+
+### 8.2 Eval-mask fix (Step A.2)
+
+Patched `scripts/eval_llm_checkpoint.py` to read `cfg.data.mask_non_path` (default `False` for safety), accept `--mask-non-path` / `--emissions-out` / `--results-out` CLI flags, and wrap the inference loop in a CodeCarbon `EmissionsTracker` when `--emissions-out` is provided.
+
+Added `mask_non_path: false` under `data:` in all seven LLM/distill maze configs:
+`configs/{llm_qwen,llm_gpt2,llm_llama,llm_smollm,distill_qwen,distill_gpt2,llm_deepseek}_maze.yaml`.
+
+Wrote `scripts/eval_distill_checkpoint.py` (parallel script for distill students, no shift, mirrors `evaluate_standard`); the existing `main.py --mode eval` path was broken for distill maze (`_run_eval` else-branch built a sudoku loader for any non-TRM model).
+
+Committed locally as `e0c6ad0`. **Not pushed** (per global rules and Contract A scope).
+
+### 8.3 Post-fix re-evals — viability gate passed
+
+Both re-evals pass Contract B §B.7 (final puzzle_acc and cell_acc within §B.2 ranges; emissions CSV exists; results JSON exists; no red flag fired). Marked **`viability gate passed`** below for M4 grep:
+
+| Run | Pre-fix | Post-fix puzzle | Post-fix cell | kWh | CO2 (kg) | Source |
+|---|---|---|---|---|---|---|
+| llm-qwen-maze-seed0 | 1.000 puzzle (saturated) | 0.000000 | 0.125154 | 0.005342 | 1.27e-3 | M1 2026-04-28T00:27, viability gate passed |
+| distill-qwen-maze-seed0 | 1.000 puzzle (saturated) | 0.000000 | 0.125021 | 0.000213 | 5.06e-5 | M1 2026-04-28T00:30, viability gate passed |
+
+Calibration anchor (Contract B §B.9): both runs at ~0.1251 cell_acc, within 0.02pp. Distill student inherits the teacher's degenerate "spam path marker `o`" strategy. Pre-fix 1.000 was the path-only metric scoring only ~10–15 % of the grid; post-fix scores all 900 cells, exposing the strategy as ~12.5 % accurate against the full label.
+
+Outputs under `results/eval_fixed/`:
+- `qwen-maze-results.json`, `qwen-maze-emissions.csv`, `qwen-maze-run.log`
+- `distill-qwen-maze-results.json`, `distill-qwen-maze-emissions.csv`, `distill-qwen-maze-run.log`
+
+Summary CSV append at `results/summary_fixed.csv` (preserves the audit trail; `results/summary.csv` is unchanged).
+
+### 8.4 SmolLM Sudoku Fix-B retrain — Phase 3 status
+
+Brief assigns SmolLM Sudoku Fix-B retrain to M1. Existing checkpoint at `C:/ml-trm-work/llm-smollm-sudoku-seed0/smollm2_360m_sudoku_latest.pt` (pre-Fix-B). Per `CHECKPOINTS.md:58` SmolLM is documented as "out of scope for cross-architecture comparison" — flagging this as a tension between brief and CHECKPOINTS.md. The brief is more recent (2026-04-27/28 vs CHECKPOINTS.md 2026-04-26) so I'm proceeding under the brief; if M4 decides SmolLM stays out-of-scope at compile time, the run becomes a stretch data point rather than a headline row.
+
+Launch parameters: `configs/llm_smollm.yaml` (sudoku, batch=16, 30 ep, lr=5e-5). Contract A redundancy watchdog set to `machine1`. Contract B §B.5 sanity check passes (dataset=sudoku, mask_non_path not applicable to sudoku).
+
+### 8.5 Files created / modified by M1 in this sprint
+
+- `scripts/check_maze_split_contamination.py` (new)
+- `scripts/eval_llm_checkpoint.py` (patched: --mask-non-path/--emissions-out/--results-out flags)
+- `scripts/eval_distill_checkpoint.py` (new)
+- `scripts/checkpoint_redundancy_watchdog.sh` (new, Contract A)
+- `configs/{llm_qwen,llm_gpt2,llm_llama,llm_smollm,distill_qwen,distill_gpt2,llm_deepseek}_maze.yaml` (mask_non_path: false)
+- `docs/sprint_layer_metric_realism_2026-04-28.md` (superseded by sprint_layer_final_2026-04-28.md)
+- `docs/sprint_layer_final_2026-04-28.md` (Contract A + B, fleet-wide)
+- `docs/sprint_brief_maze_eval_fix_2026-04-27.md` (v2, fleet-wide)
+- `results/eval_fixed/qwen-maze-{emissions.csv,results.json,run.log}`
+- `results/eval_fixed/distill-qwen-maze-{emissions.csv,results.json,run.log}`
+- `results/summary_fixed.csv` (new, 2 viability-gate-passed re-eval rows)
+- `findings.md` §8 (this entry)
+
+---
+
 ## Appendix — how to verify any of the above
 
 ```bash
