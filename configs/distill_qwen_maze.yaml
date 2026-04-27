@@ -49,6 +49,7 @@ training:
 data:
   dataset: maze
   data_dir: data/maze-30x30-hard-1k-aug
+  mask_non_path: false  # 2026-04-28 fix: score all 900 cells, closes path-only metric loophole
   num_workers: 4
 
 seed: 42
