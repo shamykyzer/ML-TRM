@@ -1,0 +1,17 @@
+label,task,model,k,puzzle_acc,cell_acc,mean_latency_ms,kwh_per_puzzle,n_puzzles,checkpoint_path
+qwen-sudoku,sudoku,qwen,1,0.0000,0.1576,4.293,0.00000023,422786,C:\ml-trm-work\novelty-qwen-sudoku-seed0\qwen2.5_0.5b_sudoku_latest.pt
+qwen-sudoku,sudoku,qwen,2,0.0000,0.1582,4.137,0.00000023,422786,C:\ml-trm-work\novelty-qwen-sudoku-seed0\qwen2.5_0.5b_sudoku_latest.pt
+qwen-sudoku,sudoku,qwen,4,0.0000,0.1637,4.135,0.00000023,422786,C:\ml-trm-work\novelty-qwen-sudoku-seed0\qwen2.5_0.5b_sudoku_latest.pt
+qwen-sudoku,sudoku,qwen,8,0.0000,0.1690,4.321,0.00000023,422786,C:\ml-trm-work\novelty-qwen-sudoku-seed0\qwen2.5_0.5b_sudoku_latest.pt
+qwen-sudoku,sudoku,qwen,16,0.0000,0.1742,4.315,0.00000023,422786,C:\ml-trm-work\novelty-qwen-sudoku-seed0\qwen2.5_0.5b_sudoku_latest.pt
+distill-sudoku,sudoku,distilled,1,0.0000,0.1748,0.127,0.00000000,422786,C:\ml-trm-work\novelty-distill-sudoku-seed0\distill_sudoku_latest.pt
+distill-sudoku,sudoku,distilled,2,0.0000,0.1758,0.122,0.00000000,422786,C:\ml-trm-work\novelty-distill-sudoku-seed0\distill_sudoku_latest.pt
+distill-sudoku,sudoku,distilled,4,0.0000,0.1856,136.477,0.00000015,422786,C:\ml-trm-work\novelty-distill-sudoku-seed0\distill_sudoku_latest.pt
+distill-sudoku,sudoku,distilled,8,0.0000,0.1976,0.130,0.00000004,422786,C:\ml-trm-work\novelty-distill-sudoku-seed0\distill_sudoku_latest.pt
+distill-sudoku,sudoku,distilled,16,0.0000,0.2112,0.127,0.00000003,422786,C:\ml-trm-work\novelty-distill-sudoku-seed0\distill_sudoku_latest.pt
+gpt2-maze,maze,gpt2,1,1.0000,1.0000,235.416,0.00000679,1000,C:\Users\amm-alshamy\OneDrive - UWE Bristol\Documents\ML-TRM\models\llm\gpt2_maze_latest.pt
+gpt2-maze,maze,gpt2,2,1.0000,1.0000,312.322,0.00000853,1000,C:\Users\amm-alshamy\OneDrive - UWE Bristol\Documents\ML-TRM\models\llm\gpt2_maze_latest.pt
+gpt2-maze,maze,gpt2,4,1.0000,1.0000,314.026,0.00000854,1000,C:\Users\amm-alshamy\OneDrive - UWE Bristol\Documents\ML-TRM\models\llm\gpt2_maze_latest.pt
+distill-gpt2-maze,maze,distilled-gpt2,1,1.0000,1.0000,13.411,0.00000023,1000,C:\Users\amm-alshamy\OneDrive - UWE Bristol\Documents\ML-TRM\models\distill_gpt2_maze\distill_maze_latest.pt
+distill-gpt2-maze,maze,distilled-gpt2,2,1.0000,1.0000,13.876,0.00000023,1000,C:\Users\amm-alshamy\OneDrive - UWE Bristol\Documents\ML-TRM\models\distill_gpt2_maze\distill_maze_latest.pt
+distill-gpt2-maze,maze,distilled-gpt2,4,1.0000,1.0000,13.370,0.00000021,1000,C:\Users\amm-alshamy\OneDrive - UWE Bristol\Documents\ML-TRM\models\distill_gpt2_maze\distill_maze_latest.pt
