@@ -534,6 +534,291 @@ After maze epoch 1 logs to wandb (~30 min in), check `val/exact_accuracy`:
 - [ ] Write §3 paper paragraphs: include the per-task hparam asymmetry as
       a research observation (see §5.12 framing block)
 
+### 5.13 M2 plot factory + K-vote extender — boot 2026-04-28
+
+Resuming on M2 (RTX 5070, post-maze fine-tune) as the report's plot
+factory + K-vote extender for the 2026-05-01 17:00 BST submission.
+Previous M2 work (TRM-Att maze seed 1 fine-tune, per
+`docs/sprint_brief_m1_m2_maze_2026-04-26.md`) finished 2026-04-26 20:49 →
+`C:/ml-trm-work/trm-att-maze-50ep-seed1/` (41 MB `best.pt`). No new
+training on this box; M2's role this session is read-only on the work
+dir and write-only on `results/figures/` + `results/novelty/`.
+
+#### 5.13.1 Status snapshot (2026-04-28 ~00:16 BST)
+
+| Figure / artifact | Trigger | Status |
+|---|---|---|
+| Figure 4 — `results/figures/sudoku_mlp_finetune_curve.png` | data on disk (`results/history_sudoku-mlp_best.csv`) | **DONE.** 13 eval rows, peak `val/puzzle_acc = 0.7486 @ ep 700` (9.88 pp below HF-init 0.8474), final 0.5722 @ ep 2200 (Δ −17.64 pp from peak). Source run is the seed-2 `8hncpi2x` curve (the best of 4 sudoku-mlp seeds per §5.12). Plot script: `scripts/plot_sudoku_mlp_finetune_curve.py`. |
+| Figure 1 — `results/figures/sudoku_acc_postfixb.png` | ≥ 3 of 4 Track B retrains landed → `results/summary_fixed.csv` populated with post-Fix-B numbers for SmolLM (M1) / Llama (M3) / Qwen (M5) / Distill-Qwen (M5) | **WAITING.** `results/summary_fixed.csv` does not yet exist. No `eval_override.json` files in any LLM dir on this box (verified across `llm-*-seed0`, `novelty-*-seed0`). |
+| Figure 3 — `results/figures/co2_per_correct_postfixb.png` | same trigger as Figure 1 | **WAITING.** Same trigger as Figure 1. |
+| K-vote sweep — `results/novelty/k_vote_runs/qwen-sudoku-fixb/` + `k_vote_pareto_qwen.png` + `k_vote_accuracy_qwen.png` | M5's Qwen Sudoku Fix-B `latest.pt` lands at `C:/ml-trm-work/novelty-qwen-sudoku-fixb-seed0/latest.pt` (or signal in §5) | **WAITING.** Dir does not exist. K-vote scope contingency: drop to K∈{1,2} if K=4 OOMs at batch=2 on the 0.5 B model. |
+| Cross-check `scripts/run_novelty_aggregate.py` for M5's `-m5` artifact rename | M5 signals rename push in §5 | **WAITING.** |
+
+#### 5.13.2 Polling plan
+
+- Re-check trigger conditions every ~15 min by reading `findings.md`
+  tail + listing `C:/ml-trm-work/` + checking `results/summary_fixed.csv`.
+- Each polling pass adds a one-line timestamped sub-bullet to §5.13.3.
+- Hard exit at 6 h (≈ 06:15 BST) with no new inputs landing.
+- Hard rules followed: no push, no destructive git, no edits to
+  `findings.md` outside §5, no edits to `results/summary.csv` /
+  `report*.md` (these stay user-merged).
+
+#### 5.13.3 Polling log
+
+- **2026-04-28 ~00:16 BST** — initial pass: only Figure 4 generated. All
+  other inputs absent. Polling started.
+
+- **2026-04-28 ~00:22 BST** — prep work done while waiting on Track B:
+  - `scripts/plot_postfixb_bars.py` written and dry-run-tested. Walks
+    8 canonical models, matches summary CSV `task` column by substring
+    (multiple candidate names per model, most-specific first), populates
+    eval-only TRM-MLP from `results/trm_official_sudoku_eval.json`,
+    populates TRM-MLP 3-seed mean from §5.12 + summary.csv
+    `sudoku-mlp-seed0` row × 3, populates Track B rows from
+    `summary_fixed.csv` first then `summary.csv` as fallback. Exit-2
+    "PROVISIONAL" path tested with 3/8 models present; the figures
+    render cleanly (HF eval, 3-seed mean ± std, Qwen pre-Fix-B at 0%
+    with hatched ∞ bar in Fig 3).
+  - Figures will be re-generated automatically when Track B retrains
+    land (re-run on each polling pass once `summary_fixed.csv` exists).
+
+- **2026-04-28 ~00:24 BST** — audit of `scripts/run_novelty_aggregate.py`
+  for the M5 `-m5` rename concern (Step D). Real finding, not just a
+  forward-looking risk:
+  - `_gather_rigs` (line ~130) only scans `<stem>-rig{N}.csv` for
+    `N ∈ NOVELTY_RIG_PLAN.keys() = {1, 2, 3}`. Hard-coded.
+  - **M4's K-vote outputs are already invisible to the aggregator.**
+    `results/novelty/k_vote_results-gpt2-sudoku.csv` and
+    `k_vote_results-distill-gpt2-sudoku.csv` (produced by
+    `scripts/run_kvote_llm_single.py`, schema-identical to the
+    rig-orchestrator) exist on disk and are NOT merged into
+    `k_vote_results.csv` (merged file has only the 6 rig-1 TRM rows).
+  - **M5's `-m5` rename will hit the same wall.**
+  - **Patch sketch (apply on M5 push):** in `_gather_rigs`, after the
+    rig-N loop, also glob `f"{stem}-*.csv"` and accept any file whose
+    suffix isn't already accepted as a rig and isn't the merged
+    `<stem>.csv` itself. The CSV adapter (`_row_to_kvote`) is already
+    label-driven and handles the schema cleanly.
+  - I will NOT pre-apply this patch — it touches shared aggregation code
+    that affects M4's existing outputs as well, and the team should
+    decide whether to merge label-suffixed files into the canonical
+    aggregate or keep them as side artifacts. Logging the diagnosis here
+    so M5 can reference it when their rename pushes.
+
+- **2026-04-28 00:27→01:56 BST** — 9 foreground polling cycles (~9 min
+  each, 1 cycle = `git fetch` + remote `summary_fixed.csv` check via
+  `git show origin/main:...` + `findings.md` §5 tail check + work-dir
+  scan). All 9 cycles clean: no Track B retrains, no Qwen-FixB
+  checkpoint, no M5 `-m5` K-vote files, remote findings.md latest is
+  still §5.12.
+
+- **2026-04-28 ~01:57 BST** — switched to background polling
+  (`scripts/m2_background_poll.sh`, run_in_background). 20 cycles × 15
+  min ≈ 5 h, exits at ~06:57 BST or earlier on trigger / stop flag.
+  Log: `/tmp/m2_background_poll.log`. Trigger flag:
+  `/tmp/m2_poll_trigger` (touched when any of summary_fixed.csv /
+  qwen-fixb dir / -m5 files / eval_fixed dir appear). Stop flag:
+  `/tmp/m2_poll_stop` (touch to halt early).
+
+#### 5.13.4 Contract A + Contract B acknowledgement on M2 (2026-04-28 ~00:45 BST)
+
+Both contracts received and integrated into M2's workflow for the rest of
+the sprint. M2's role is inference-only this session (plot factory + K-vote
+sweep) — neither contract is heavy-touch here, but both apply.
+
+**`start.py status` confirms environment health** (run 2026-04-28 ~00:46 BST):
+`venv ✓, sync [ ], env ✓, wandb ✓, transfer ✓, data ✓`. The `sync` stage
+is stale (requirements.txt drifted vs venv) — fine for matplotlib /
+seaborn / csv plotting, may matter for the K-vote sweep when it lands. If
+the K-vote sweep fails on an import, I will re-run `start.py` once to
+advance the sync stage before re-trying. Do not auto-run sync now to avoid
+churning pip install during the polling window.
+
+**Contract A on M2:**
+- No active *training* on this box — Contract A's 30-min watchdog requirement
+  does not apply to the polling/plotting work. Per §A.5, re-eval-class
+  inference (K-vote inference here) is exempt; instead I will do the
+  one-shot fleet-visibility copy at the end of any K-vote run:
+  `cp -r results/novelty/k_vote_runs/qwen-sudoku-fixb/  "C:/ml-trm-work/checkpoints to use/machine2/k_vote_fixed/"`.
+- All 30-min snapshots already taken by other machines for in-flight Track B
+  retrains will be respected — M2 doesn't write to `checkpoints to use/`
+  except in the one-shot fleet-copy described above.
+
+**Contract B on M2:**
+- *Figure 4 (already shipped)* — TRM-MLP from-scratch peak `puzzle_acc =
+  0.7486 @ ep 700` and `cell_acc = 0.8613 @ ep 700` are inside §B.2's
+  expected ranges (74.25 ± 0.63% puzzle, ~85.3% cell). The decay tail
+  shown in the figure (final 0.5722 @ ep 2200) is the *story* the figure
+  tells (peak-then-overfit) — the *headline number* reported to summary
+  is the peak, which sits inside the green band. **viability gate passed**.
+- *Figures 1 + 3 (waiting on Track B)* — `scripts/plot_postfixb_bars.py`
+  will be patched to apply §B.3 row-level red-flag checks before
+  including any `summary_fixed.csv` row in the bar charts. LLM rows with
+  `puzzle_acc > 0.05` (Sudoku) or `cell_acc < 0.091` (chance floor) are
+  excluded from the figure and reported as **metric realism violation**
+  in §5 with the row's source label.
+- *K-vote on Qwen Sudoku Fix-B (waiting)* — the K=1 row will be checked
+  against §B.2's LLM-Sudoku band: `puzzle_acc = 0.00`, `cell_acc ∈
+  [0.091, 0.30]` (allowing some headroom above the §B.9 calibration
+  anchor of 0.125). Compliant runs get a **viability gate passed** entry;
+  violations get **metric realism violation**.
+- Driver wrapper `scripts/run_qwen_fixb_kvote.py` pre-written
+  (2026-04-28 ~00:50 BST, refactored ~02:05 BST to non-clobbering path).
+  Wraps `scripts/run_kvote_llm_single.py` (per-label writer) instead of
+  `scripts/run_novelty_k_vote.py` — the latter without `--rig` would
+  overwrite the merged `results/novelty/k_vote_results.csv` and destroy
+  existing TRM rows. The label-suffixed output is written to
+  `results/novelty/k_vote_results-qwen-sudoku-fixb.csv` (untouched
+  merged file). Invocation:
+  `python scripts/run_qwen_fixb_kvote.py --m5-checkpoint <path>`
+  Driver: `start.py status` → `run_kvote_llm_single.py` (K=1,2,4 with
+  batch-size 2; K=4 OOM fallback to K=1,2) → emit
+  `k_vote_pareto_qwen.png` + `k_vote_accuracy_qwen.png` (per the M2
+  brief's named filenames) → fleet-copy to
+  `"checkpoints to use/machine2/k_vote_fixed/"` per Contract A.5 →
+  Contract B K=1 row check → verdict block printed for §5 transcription.
+
+**Calibration anchors used for Contract B checks** (from §B.9 and §1):
+- TRM-MLP HF eval Sudoku: 0.8474 puzzle / 0.9155 cell (inference-only).
+- TRM-MLP from-scratch 3-seed mean: 0.7425 ± 0.0063 puzzle / ~0.86 cell.
+- LLM Sudoku post-Fix-B (expected): 0.000 puzzle / 0.091 → 0.20 cell.
+- Distill Sudoku post-Fix-B (expected): 0.000 puzzle / 0.10 → 0.36 cell.
+
+**Pre-existing folder name discrepancy (informational, no action):**
+`C:/ml-trm-work/checkpoints to use/` already contains `machine 2/` (with
+a space, created Apr 27 20:33 BST by an earlier M2 session). It holds
+prior M2 artifacts (`analysis_run_*.md` post-mortems, `k_vote_*.csv/png`
+from the HF-maze K-vote, `novelty-trm-att-maze-seed1/`,
+`hf_baseline_maze_remapped_for_local.pt`). Contract A canonical is
+`machine2/` (no space). I will NOT rename — the existing folder may be
+referenced by something I don't know about. New M2 outputs from this
+session will land in `machine2/` (no space, fresh) per the contract,
+leaving `machine 2/` as a historical archive.
+
+#### 5.13.5 M2 ready-state summary (handoff to triggers / future M4 sweep)
+
+Everything M2 can do without waiting on Track B is done. The list below
+is the full state of M2 deliverables as of 2026-04-28 ~02:15 BST so the
+next agent (or human) can pick up immediately when triggers fire.
+
+**Files M2 has shipped this session:**
+
+| Path | Purpose | State |
+|---|---|---|
+| `results/figures/sudoku_mlp_finetune_curve.png` | Figure 4 (M2 brief) | DONE |
+| `scripts/plot_sudoku_mlp_finetune_curve.py` | Figure 4 generator | DONE |
+| `scripts/plot_postfixb_bars.py` | Figures 1 + 3 generator with Contract B per-row gate | DONE; ran in PROVISIONAL mode (3/8 entries: HF eval, 3-seed mean, Qwen pre-Fix-B). Re-run when `summary_fixed.csv` lands. |
+| `results/figures/sudoku_acc_postfixb.png` | Figure 1 (M2 brief) | PROVISIONAL — overwrites on next run |
+| `results/figures/co2_per_correct_postfixb.png` | Figure 3 (M2 brief) | PROVISIONAL — overwrites on next run |
+| `scripts/run_qwen_fixb_kvote.py` | K-vote driver wrapping `run_kvote_llm_single.py` (per-label, non-clobbering) — start.py sanity, K∈{1,2,4} with K=4 OOM fallback, fleet-copy, Contract B verdict | DONE; awaits M5 ckpt path |
+| `scripts/m2_background_poll.sh` | 20-cycle × 15-min watcher writing to `/tmp/m2_background_poll.log`; touches `/tmp/m2_poll_trigger` on any trigger | DONE; running in background |
+
+**One-line invocations to fire when triggers land:**
+
+```bash
+# Figs 1 + 3 (re-runs whenever summary_fixed.csv changes; idempotent)
+python scripts/plot_postfixb_bars.py
+
+# K-vote on Qwen Sudoku Fix-B (M5's checkpoint path is the only required input)
+python scripts/run_qwen_fixb_kvote.py --m5-checkpoint <path-from-M5>
+```
+
+**Trigger-to-action map:**
+
+| Trigger | Action | Owner |
+|---|---|---|
+| `results/summary_fixed.csv` exists with ≥ 3/4 Track B rows | run `plot_postfixb_bars.py`; transcribe Contract B verdict per row to §5 | M2 |
+| `<work_dir>/novelty-qwen-sudoku-fixb-seed0/latest.pt` exists, OR M5 signals path in §5 | run `run_qwen_fixb_kvote.py --m5-checkpoint <path>` | M2 |
+| `results/novelty/k_vote_results-*m5*.csv` exist | run `python -c "from scripts.run_novelty_aggregate import main; main()"` to confirm aggregator misses them; if so, apply the §5.13.3 patch sketch and re-run aggregator | M2 |
+| Track A maze re-eval JSONs land in `results/eval_fixed/` | confirm Contract B band (puzzle ≈ 0, cell ≈ 0.125 per §B.9) for each; transcribe `viability gate passed` or `metric realism violation` to §5 | downstream |
+
+**What M2 cannot do (requires another agent / human):**
+
+- Pull latest from origin (would risk merge conflicts on `findings.md`
+  which other machines also write to). Do `git fetch` only; read remote
+  files via `git show origin/main:<path>`.
+- Push anything (per task brief). All changes here are working-tree
+  only.
+- Edit `results/summary.csv` or `report*.md` (per task brief).
+- Apply the `_gather_rigs` patch to `run_novelty_aggregate.py` —
+  diagnosed in §5.13.3 but not pre-applied because it touches shared
+  aggregation code that affects M4's existing K-vote outputs.
+
+**Background polling status as of ~02:15 BST:** running, cycle 2 of 20
+expected to fire at 02:12:39 BST. Hard exit at ~06:57 BST or earlier on
+trigger / `touch /tmp/m2_poll_stop`. Trigger flag at
+`/tmp/m2_poll_trigger`. Log at `/tmp/m2_background_poll.log`.
+
+#### 5.13.6 M2 exit — 6 h polling window expired (2026-04-28 06:53 BST)
+
+Exit per task brief ("Exit cleanly if waiting on inputs that never land
+within 6 h").
+
+**Polling outcome:** 9 foreground cycles (00:27→01:56 BST) + 20
+background cycles (01:57:39→06:43:02 BST) = **29 cycles, 0 triggers**.
+Across the entire 6 h window: no `summary_fixed.csv` (local or remote),
+no Qwen-FixB checkpoint dir, no `-m5` K-vote files, no `eval_fixed/`
+dir, no new §5.x entries on remote `findings.md` (still §5.12). Trigger
+flag `/tmp/m2_poll_trigger` was never created. Background poller stopped
+cleanly via `TaskStop` at exit.
+
+**Brief's verification checklist:**
+
+- [x] **All 3 figures (1, 3, 4) saved under `results/figures/`.**
+  - **Figure 4** — `sudoku_mlp_finetune_curve.png` (87 KB) — **FINAL.**
+    Source data was on disk from session start.
+  - **Figure 1** — `sudoku_acc_postfixb.png` — **PROVISIONAL, 5/8.**
+    HF eval (0.847), 3-seed mean (0.743 ± 0.006), GPT-2 (0.000),
+    Qwen pre-FixB (0.000), Distill-GPT-2 (0.000). Missing: SmolLM,
+    Llama, Distill-Qwen (Track B retrains never landed).
+  - **Figure 3** — `co2_per_correct_postfixb.png` — **PROVISIONAL,
+    5/8.** TRM-MLP HF (1.34e-6 kg), TRM-MLP 3-seed (5.00e-5 kg), GPT-2
+    (∞), Qwen (∞), Distill-GPT-2 (∞). Same missing 3.
+
+  Re-running `python scripts/plot_postfixb_bars.py` after Track B lands
+  will fill in the missing bars and remove the PROVISIONAL exit-2 status.
+
+- [x] **K-vote sweep outputs in `results/novelty/k_vote_runs/qwen-sudoku-fixb/` IF Qwen-Fix-B landed; otherwise findings.md entry explaining skip.**
+  Qwen-Fix-B did not land. Skip explanation: M5 did not produce a
+  Fix-B retrained Qwen Sudoku checkpoint within the 6 h polling window;
+  no entry in §5 from M5; no `novelty-qwen-sudoku-fixb-seed0/` directory
+  on disk. Driver `scripts/run_qwen_fixb_kvote.py` is shipped and
+  ready — invocation listed in §5.13.5.
+
+- [x] **M5 K-vote artifact integrity confirmed in §5.**
+  M5 did not push `-m5` renames within the 6 h window. The aggregator
+  audit was completed pre-emptively in §5.13.3: confirmed
+  `_gather_rigs` is hardcoded to `-rig{1,2,3}.csv` and would miss any
+  `-m5`-suffixed file the same way it currently misses M4's existing
+  `-gpt2-sudoku.csv` / `-distill-gpt2-sudoku.csv` outputs. Patch sketch
+  recorded in §5.13.3 for whoever applies the fix on M5's push.
+
+- [x] **All decisions logged with timestamps.** §5.13 through §5.13.6
+  inclusive.
+
+**State of the world as M2 exits:**
+
+- `results/figures/` has all three M2-target PNGs (Fig 4 final, Figs
+  1+3 provisional but useful — they already show TRM dominance over
+  the LLM/distill baseline cleanly).
+- `scripts/` has 4 new generators: `plot_sudoku_mlp_finetune_curve.py`,
+  `plot_postfixb_bars.py` (with Contract B per-row gate + K-vote-CSV
+  fallback), `run_qwen_fixb_kvote.py` (Contract A.5 fleet-copy + Contract
+  B verdict), `m2_background_poll.sh`.
+- No git push performed (per task brief). All edits are working-tree
+  only and additive — no modifications to `findings.md` outside §5,
+  no edits to `results/summary.csv`, no edits to `report*.md`.
+- Background polling was stopped cleanly. No orphan processes left.
+
+**Pickup instructions for whoever resumes:** see §5.13.5 trigger-to-action
+table. The two one-liners that close out M2's deliverables once Track B
+lands:
+```bash
+python scripts/plot_postfixb_bars.py                                 # final Figs 1+3
+python scripts/run_qwen_fixb_kvote.py --m5-checkpoint <path-from-M5> # K-vote sweep
+```
+
 ---
 
 ## 6. ML Lead responsibilities — progress audit (2026-04-19)
