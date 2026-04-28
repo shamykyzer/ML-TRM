@@ -24,8 +24,13 @@
 set -u
 
 REMOTE="${RCLONE_REMOTE:-gdrive}"
-SOURCE="C:/ml-trm-work/checkpoints to use"
-DEST_PATH="${REMOTE}:"     # the remote's root_folder_id maps to the Drive folder
+# The Drive folder (root_folder_id 17N5HgyiL-CLH2w_31wSr7Xgu2OcwFRZk) is the
+# M4 machine view — its top level holds the 01_*..09_* numbered subfolders
+# directly. So source defaults to the local machine 4/ folder, not the
+# parent "checkpoints to use/". Override with TRM_SYNC_SOURCE if a
+# different machine N folder needs to be pushed instead.
+SOURCE="${TRM_SYNC_SOURCE:-C:/ml-trm-work/checkpoints to use/machine 4}"
+DEST_PATH="${REMOTE}:"     # remote's root_folder_id maps to the Drive folder
 
 if ! command -v rclone >/dev/null 2>&1; then
     RCLONE_BIN="C:/Users/amm-alshamy/AppData/Local/Microsoft/WinGet/Packages/Rclone.Rclone_Microsoft.Winget.Source_8wekyb3d8bbwe/rclone-v1.73.5-windows-amd64/rclone.exe"
