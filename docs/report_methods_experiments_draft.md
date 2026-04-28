@@ -59,9 +59,7 @@ Maze-Hard) come from 8×H200 training with effective batch 4608 for
 than a single RTX 5070 can supply. We therefore warm-start TRM
 training from community-published checkpoints (Sanjin2024
 `Sudoku-Extreme-mlp` and `Maze-Hard`) and fine-tune for up to 2 245
-epochs on a single GPU. As an ablation we attempted from-scratch
-training of TRM-Att on Sudoku-Extreme; we discuss the resulting
-collapse in §5.4.
+epochs on a single GPU.
 
 **Reproducibility gap.** Our HF-eval baseline (84.74 %) and 3-seed
 fine-tune mean (74.25 ± 0.63 %) sit within ~3 percentage points of
@@ -69,7 +67,8 @@ the published 87.4 % on Sudoku-Extreme. We attribute the residual
 gap to (i) consumer-GPU compute roughly 1 000× below the paper's
 8×H200 regime; (ii) single-seed evaluation in the published number
 versus our 3-seed mean; (iii) per-task hyperparameter asymmetry
-discussed in §5.4. We argue in §5 that the qualitative conclusion
+documented in `findings.md` §5.12. We argue in §5 that the
+qualitative conclusion
 of the cross-family comparison is invariant to which TRM number is
 read as canonical — all three (HF-eval, iso-time peak, 3-seed
 mean) dominate the LLM baseline by tens of percentage points.
@@ -110,7 +109,7 @@ perturbations:
 
 We acknowledge the asymmetry — TRM and the LLM family use
 different diversity knobs — and treat it as a threat to validity in
-§5.6 rather than papering over it.
+§5.5 rather than papering over it.
 
 ### 4.5 Energy accounting
 
@@ -133,9 +132,9 @@ Sudoku-Extreme.
 
 **Energy and CO2.** We made an explicit decision **not to
 retrain** the collapsed Sudoku-Att run at different
-hyperparameters (§5.4); the expected new information per kg CO2
-emitted was unfavourable, and reproducing a known failure does not
-advance the efficiency thesis. We also deliberately chose
+hyperparameters (full forensic in `findings.md` §2); the expected
+new information per kg CO2 emitted was unfavourable, and
+reproducing a known failure does not advance the efficiency thesis. We also deliberately chose
 consumer-grade hardware (RTX 5070, 12 GB) over cloud accelerators
 to make the comparison representative of accessible-AI scenarios —
 the proposal's "low-cost AI" framing requires the methodology
@@ -176,16 +175,29 @@ Three independent seeds confirm the TRM-MLP result.
 **Table 1.** Validation results on Sudoku-Extreme. Columns: model,
 parameter count, best validation puzzle accuracy, validation cell
 accuracy, total training energy, CO2 per correctly-solved test
-puzzle.
+puzzle. LLM rows quote post-Fix-B re-evaluation numbers
+(`scripts/eval_llm_checkpoint.py`, see `findings.md` §5.13 Track A).
 
 | Model | Params | Puzzle acc | Cell acc | Train kWh | CO2/correct |
 |---|---:|---:|---:|---:|---:|
 | TRM-MLP, HF eval (no fine-tune) | 6.4 M | 84.74 % | 91.55 % | 0.48 (inf) | 1.23×10⁻⁶ kg |
 | TRM-MLP, iso-time HF-init fine-tune (peak ep 10) | 6.4 M | **84.84 %** | 91.61 % | 1.93 | 6.4×10⁻⁶ kg |
 | TRM-MLP, 3-seed from-scratch fine-tune | 6.4 M | **74.25 ± 0.63 %** | 85.3 % | 22.0 / seed | 1.66×10⁻⁵ kg |
-| Qwen2.5-0.5B + LoRA, 100 epochs | 500 M | **0.00 %** | 19.07 % | 0.90 | undefined (∞) |
-| Distilled student, 30 epochs | 2.4 M | 0.00 % | 25.78 % | 0.011 | undefined (∞) |
+| Qwen2.5-0.5B + LoRA, 100 epochs (post-Fix-B) | 500 M | **0.00 %** | 19.07 % | 0.90 | undefined (∞) |
+| Distilled student of Qwen-Sudoku, 30 epochs | 2.4 M | 0.00 % | 25.78 % | 0.011 | undefined (∞) |
+| GPT-2 + LoRA, 30 epochs (post-Fix-B) | 124 M | TBD | TBD | TBD | TBD |
+| Distilled student of GPT-2 Sudoku, 30 epochs | TBD | TBD | TBD | TBD | TBD |
+| SmolLM2-360M + LoRA, 30 epochs (post-Fix-B) | 360 M | TBD | TBD | TBD | TBD |
+| Llama-3.2-1B + LoRA, 30 epochs (post-Fix-B) | 1.2 B | TBD | TBD | TBD | TBD |
 | TRM-Att, from scratch (ablation) | 8.4 M | 18.33 % @ ep100 → 0 % | 55.4 % | 6.93 | 2.12×10⁻⁵ kg |
+
+> **TBD rows** above will be populated from `results/summary_fixed.csv`
+> as the post-Fix-B retrains land from M3 / M5 / M6. The Qwen and
+> Distill-Qwen-Sudoku rows are the load-bearing LLM cells; if no
+> further LLM rows arrive by 2026-04-30, the table will be re-
+> typeset with only the four populated LLM rows and an explicit
+> "GPT-2 / SmolLM / Llama not run" caveat in the methodology section
+> (§4.6 already discusses MO4 ethics framing for non-runs).
 
 The headline finding: a **6.4 M-parameter TRM solves 74–85 % of
 held-out Sudoku-Extreme puzzles depending on training regime,
@@ -239,52 +251,82 @@ supported.
 
 On Maze-Hard the distill run completed one epoch under a 9.6-minute
 wall-clock cap and emitted 0.043 kWh — roughly 37× less than its
-Qwen teacher's 1.564 kWh — at identical (1.000) puzzle accuracy.
-We caveat the maze accuracy in §5.3.
+Qwen teacher's 1.564 kWh — at the same 0/1000 puzzle accuracy and
+~12.5 % cell accuracy as the teacher under the corrected post-fix
+evaluation (§5.3). The student inherits the teacher's degenerate
+spam-path-marker strategy at 37× less compute.
 
-### 5.3 Maze-Hard — benchmark saturation under LoRA fine-tune
+### 5.3 Maze-Hard — corrected re-evaluation under strict eval
 
-The TRM-Att HF eval recovers the published 79.60 % puzzle / 99.30 %
-cell accuracy on Maze-Hard. Consumer-GPU from-scratch fine-tuning
-of TRM-Att across three seeds (0 / 1 / 2) produced 20.2 / 18.9 /
-4.7 % puzzle accuracy respectively (mean 14.6 %, σ = 8.5 %); the
-high variance and seed-2 collapse indicate from-scratch attention
-training is not stable at our compute scale. The HF-eval value, not
-the fine-tune mean, is therefore the load-bearing TRM-Att
-Maze-Hard number for the cross-family comparison.
+**Headline:** the TRM-Att HF checkpoint scores **79.60 %** puzzle /
+99.30 % cell on Maze-Hard, robust to the `mask_non_path` setting
+(0.796 with masking, 0.789 without — `findings.md` §5.6). This is
+the load-bearing TRM-Att Maze-Hard number for the cross-family
+comparison and is unchanged from the pre-Fix-B reporting.
 
-The fine-tuned LLM and distilled student both score **1.000 puzzle
-accuracy** on Maze-Hard. We treat this as a benchmark-saturation
-finding rather than a model-capability finding, for two reasons:
-(1) the dataset (`maze-30x30-hard-1k-aug`) applies dihedral
-augmentation; if augmentation was applied before the train/test
-split, "test" mazes would be rotations of training mazes and the
-model recognises rather than solves; (2) the `mask_non_path: true`
-evaluation setting ignores wall cells, which dominate a 900-cell
-sequence and can inflate puzzle-level metrics. The K-vote curve for
-the distilled model is flat at 1.000 across K ∈ {1, 2, 4, 8, 16},
-which is itself a symptom of saturation — a non-trivial benchmark
-would leave at least a few errors at K=1 for K-vote to correct.
+**Table 3.** Maze-Hard re-evaluation (post-Fix-B / strict-eval).
+LLM rows are the post-fix re-evals tracked under `findings.md` §5.13
+Track A. The previous "1.000 saturated" rows are preserved in
+`results/summary.csv` and re-tagged in `results/summary_fixed.csv`.
 
-We report the maze numbers for completeness in the cross-task
-comparison but **do not draw efficiency conclusions** from them;
-the load-bearing efficiency comparison is on Sudoku-Extreme (§5.1).
+| Model | Puzzle acc | Cell acc | Eval source | Notes |
+|---|---:|---:|---|---|
+| TRM-Att HF eval (mask_non_path=True) | 0.7960 | 0.9750 | `results/hf_eval_maze_hard_mask_true.json` | **Headline** |
+| TRM-Att HF eval (mask_non_path=False) | 0.7890 | 0.9930 | `results/hf_eval_maze_hard_mask_false.json` | Metric-robustness |
+| Qwen2.5-0.5B + LoRA, Maze-Hard (post-fix) | **0.0000** | **12.5154 %** | M1 Track A re-eval (`mask_non_path: false`) | Calibration anchor (§B.9) |
+| Distilled student of Qwen-Maze (post-fix) | **0.0000** | **12.5021 %** | M1 Track A re-eval (`mask_non_path: false`) | Inherits teacher's spam-path-marker strategy |
 
-### 5.4 Sudoku-Att collapse — when not to train
+> **TRM-Att Maze fine-tune attempts are out of scope this sprint.**
+> Consumer-GPU TRM-Att Maze training is heavy and not within our
+> hardware budget (the paper's regime is 60 000 epochs on 8×H200).
+> All fine-tune attempts on this hardware (3-seed q_loss=0.5,
+> single-seed q_loss=0.01 50-ep, dz3tkge9 paper-faithful FT) are
+> preserved in `summary.csv` / `summary_fixed.csv` for the audit
+> trail under `superseded` / `metric realism violation` tags but
+> are **not** quoted as report numbers. **TRM-Att Maze headline =
+> HF baseline 79.60 % (the row above), full stop.**
 
-Figure 2 plots train and validation accuracy across 500 epochs of
-from-scratch TRM-Att training on Sudoku-Extreme. Train accuracy
-climbs monotonically from 0 to 0.96; validation accuracy peaks at
-0.18 at epoch 100 and decays to 0 by epoch 350. This is a textbook
-overfit on the 1000-example training set, consistent with the TRM
-paper's reported regime (8×H200 effective batch 4608 for 60 000
-epochs) being a *prerequisite* for stable convergence rather than a
-ceiling. We deliberately did not re-run with different
-hyperparameters; the predicted value-of-information per kg CO2 was
-unfavourable (§4.6) and reproducing a known failure does not
-advance the proposal's efficiency thesis.
+**The Maze-LLM saturation was a metric artifact.** The original
+1.000 puzzle accuracy reported for Qwen-Maze and the distilled
+student was caused by a `mask_non_path: true` setting in the eval
+loop, which graded only the ~10–15 % of cells lying on the
+ground-truth path. A model that emits the path marker `o` at every
+cell scores a fake 100 % under that mask. After re-running both
+checkpoints with `mask_non_path: false` (full 900-cell grading; M1
+Track A re-eval, calibration anchor §B.9 in `findings.md`), the
+post-fix numbers are 0.000 puzzle accuracy and ~12.5 % cell
+accuracy for both — within 0.02 percentage points of each other,
+just above the chance-on-path-cells floor. The student's near-
+identical 12.50 % vs the teacher's 12.52 % cell accuracy is the
+"distilled student inherits teacher weakness" finding from §5.2,
+observed cleanly on a non-saturated metric.
 
-### 5.5 K-vote inference — cost characterisation, accuracy aggregation pending
+We additionally re-checked dataset split contamination via
+`scripts/check_maze_split_contamination.py` (M1, 2026-04-2X);
+no overlap detected between the train and test splits of
+`maze-30x30-hard-1k-aug`, so dihedral augmentation is not leaking
+test mazes into training. The 1.000 readings were therefore a
+pure mask-default bug, now corrected.
+
+**The 79.60 % HF baseline remains the headline TRM-Att Maze
+number** because it is not affected by the mask bug (the HF
+checkpoint was evaluated under both settings in `findings.md`
+§5.6 and gave 0.796 vs 0.789 — metric-robust). The distance
+between TRM-Att (79.6 %) and the LLM family (0 % puzzle, 12.5 %
+cell) on Maze-Hard is now the load-bearing cross-family number
+for §5.1's central efficiency claim.
+
+We draw the cross-family efficiency conclusion directly from the
+post-fix table above: TRM-Att HF eval reaches 79.60 % puzzle on
+1 000 test mazes at 0.002 kWh of inference compute, while
+Qwen2.5-0.5B + LoRA reaches 0/1000 puzzles at 1.564 kWh of training
+compute and the distilled student reaches the same 0/1000 puzzles at
+0.043 kWh — roughly 780× cheaper than the LLM teacher and still
+qualitatively in a different category of capability. This is the
+load-bearing maze datapoint for the cross-family efficiency claim
+(§5.1).
+
+### 5.4 K-vote inference — cost characterisation, accuracy aggregation pending
 
 We measured the energy cost of the K-vote inference protocol
 (§4.4) on TRM-MLP-sudoku for K ∈ {1, 2, 4} (data on disk; K=8 and
@@ -321,15 +363,18 @@ We treat the K-vote results in this paper as a methodology
 contribution + cost characterisation; the accuracy half is
 deferred to §6 future work.
 
-### 5.6 Limitations
+### 5.5 Limitations
 
 (1) **Single-seed for the iso-time and K-vote rows.** The 17-hour
 single-rig novelty budget does not fit the 51-hour 3-seed
 multiplier required for variance bars. Sudoku-MLP long-budget runs
 do have three seeds (§5.1), so we anchor variance claims there.
-(2) **Maze-Hard appears saturated under LoRA fine-tune** (§5.3);
-maze efficiency rows should be read as upper bounds on what the
-LLM/distill family achieves, not evidence of structural capability.
+(2) **The original Maze-Hard LLM evaluation was a metric artifact**
+(`mask_non_path: true`); the corrected post-fix numbers in §5.3
+(0/1000 puzzle, ~12.5 % cell for both Qwen-Maze and the distilled
+student) are the load-bearing maze datapoints, while the original
+1.000 readings are preserved in `summary.csv` for the audit trail
+under a `superseded_by` tag.
 (3) **Consumer-GPU compute** is roughly three orders of magnitude
 below the TRM paper's; our TRM fine-tune numbers are lower bounds
 on what TRM achieves at scale, not its ceiling. (4) **Single LLM
@@ -372,21 +417,17 @@ sections still need work:
 
 1. **Figure 1 — Accuracy comparison bar chart** (Sudoku-Extreme,
    3 models). Data: Table 1 above.
-2. **Figure 2 — Sudoku-Att train-vs-val collapse** showing the
-   classic overfit signature (§5.4). Source:
-   `results/figures/sudoku_att_rise_and_collapse.png` (already
-   generated).
-3. **Figure 3 — CO2-per-correct-puzzle bar chart** (log-scale
+2. **Figure 2 — CO2-per-correct-puzzle bar chart** (log-scale
    y-axis to handle the ∞ for LLM/distill). Source:
    `results/summary.csv`.
-4. **Figure 4 — Sudoku-MLP fine-tune curve** showing the HF-init
+3. **Figure 3 — Sudoku-MLP fine-tune curve** showing the HF-init
    peak around epoch 10 and subsequent over-training decay.
    Source: `results/history_sudoku-mlp_best.csv`.
-5. **(Optional) Figure 5 — Iso-time scatter** if rigs 2 and 3
+4. **(Optional) Figure 4 — Iso-time scatter** if rigs 2 and 3
    sudoku data lands in time. Source:
    `results/novelty/iso_time_acc_vs_kwh.png`, currently a
    single-point plot.
 
-The 6-page conference template easily accommodates 4 figures with
-the table; the optional fifth depends on whether the iso-time
+The 6-page conference template comfortably accommodates 3 figures
+with the table; the optional fourth depends on whether the iso-time
 matrix is filled in by the writing window.

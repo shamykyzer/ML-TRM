@@ -21,3 +21,6 @@ hf_checkpoints/
 # Auto-generated GPU-tuned configs
 configs/*_tuned.yaml
 
+# Aggregator-poll local state (M4 central editor; per-machine, do not sync)
+.aggregator_state.json
+

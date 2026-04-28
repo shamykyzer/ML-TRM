@@ -536,6 +536,275 @@ After maze epoch 1 logs to wandb (~30 min in), check `val/exact_accuracy`:
 
 ---
 
+### 5.13 Apr-26/28 sprint — central editor/aggregator handover (M4)
+
+Added 2026-04-28. M4 has pivoted from running its assigned LLM-Sudoku
+fleet to acting as the **central editor / aggregator** for the May-1
+submission. M4 polls the work tree for retrains and re-evals landing
+from M1, M3, M5, (M6) and folds them into:
+
+- `results/summary_fixed.csv` — schema mirrors `summary.csv` plus a
+  `superseded_by` column; old saturated maze rows are preserved in
+  `summary.csv` for the audit trail and re-tagged here.
+- `findings.md` §5 (this section) — Track A and Track B sub-rolls.
+- `docs/report_methods_experiments_draft.md` §5.1 / §5.3 — text patches
+  per the latest verified numbers.
+- `submission/supplementary_<date>.zip` — built only after both Track A
+  and Track B are flagged complete below.
+
+#### M4 baseline confirmation (2026-04-28)
+
+Inventory of `C:\ml-trm-work\` on M4 via
+`scripts/check_local_checkpoints.py --machine M4`:
+
+| Sprint-plan task | Local status | Where |
+|---|---|---|
+| `gpt2-sudoku` (M4) | **NOT-STARTED locally** | no `llm-gpt2-sudoku-seed0/` |
+| `distill-gpt2-sudoku` (M4) | **NOT-STARTED locally** | no `distill-gpt2-sudoku-seed0/` |
+| `distill-qwen-sudoku` (M4) | **NOT-STARTED locally** | metric source: rig-2 OneDrive |
+| `kvote-trm-mlp-sudoku` (M4) | **NOT-STARTED locally** | rig-1 produced `results/novelty/k_vote_results.csv` |
+
+What M4 *does* have locally and is keeping warm for the aggregator:
+
+- `C:\ml-trm-work\checkpoints to use\machine 4\` — 9-folder curated set
+  (`01_trm-mlp-sudoku-3seeds-finetune` … `09_trm-att-maze-3seeds-finetune-unstable`)
+  with its own README.md indexing each subfolder to a report row. This
+  is the audit-trail set: the .pt files for items 1, 2, 5, 6, 7, 8, 9
+  are local; items 3 and 4 hold pointer-READMEs to rig-2 disks.
+- `C:\ml-trm-work\trm-att-maze-50ep-seed2\` — own 50-ep TRM-Att Maze
+  fine-tune (training_results.json: `best_puzzle_acc = 0.476`,
+  `energy_kwh = 1.063`, `emissions_kg = 0.253`). Not yet folded into
+  `summary.csv`; will land in `summary_fixed.csv` as a Track A
+  follow-up row.
+- `C:\ml-trm-work\novelty-trm-att-maze-seed2\latest.pt` — the K-vote
+  source checkpoint; matches the HF Maze-Hard 0.796 baseline at K=1.
+- `C:\ml-trm-work\novelty-distill-maze-seed0\` and
+  `C:\ml-trm-work\novelty-qwen-maze-seed0\` — saturation-row sources.
+
+**Headline:** M4's *originally assigned* GPT-2 Sudoku and Distill-GPT-2
+Sudoku Fix-B retrains are not present on the M4 work disk. The
+aggregator role is unblocked anyway because the *report's*
+load-bearing Sudoku-LLM cell is filled by Qwen / distill-Qwen on
+rig 2 (`results/summary.csv` row `llm-qwen-sudoku-seed0` plus
+`training_run_analysis.md` for the distill student). M4 baseline
+**partially confirmed** for the Apr-26 sprint as currently scoped;
+GPT-2 Sudoku rows will be added if and only if the .pt files arrive
+(see Track B below).
+
+#### Track A — re-evals (Fix-B / mask sensitivity / strict eval)
+
+Format: one sub-entry per re-eval that lands. Schema:
+`<model>` — before → after, ckpt path, eval config commit, source.
+
+- 2026-04-19 — `llm-qwen-sudoku-seed0` (M2 / FCM) — pre-Fix-B eval
+  *broken*; post-Fix-B = **0.00 % puzzle / 19.07 % cell**. Source:
+  `scripts/eval_llm_checkpoint.py` against
+  `C:/ml-trm-work/llm-qwen-sudoku-seed0/qwen2.5_0.5b_sudoku_latest.pt`,
+  50 batches × 16 = 800 puzzles from sudoku-extreme test split.
+  Cross-validated against a 187 840-puzzle partial sample (0.1913).
+- 2026-04-19 — `TRM-Att Maze HF eval` (M? / FGD) — re-evaluated under
+  both `mask_non_path` settings. mask_non_path=True → 0.796; mask_non_path=False → 0.789.
+  HF checkpoint is metric-robust. Used as the headline TRM-Att Maze
+  number; see `results/hf_eval_maze_hard_mask_{true,false}.json`.
+- *(append further Track A rows here as they land — pending: M1, M3, M5
+  re-evals on their own checkpoints)*
+
+**Track A status: in progress.** Will be flagged complete once M1, M3,
+M5 each post a Fix-B re-eval entry above.
+
+#### Track B — retrains (post-Fix-B, post-q-loss-fix)
+
+Format: one sub-entry per retrain that lands. Schema:
+`<model>` — pre-Fix-B numbers, post-Fix-B numbers, CodeCarbon project,
+kWh + CO₂.
+
+- 2026-04-22 — `qwen2.5-0.5b-maze-seed0` (M2 / FCM) —
+  pre: not run; post: 1.000 puzzle / 1.000 cell (saturated; see
+  §5.3 caveat in M+E draft); CodeCarbon project
+  `qwen2.5-0.5b-maze-seed0`; ~1.564 kWh.
+- 2026-04-23 — `distill-maze-seed0` (M2 / FCM, 9.6-min wall-clock cap) —
+  post: 1.000 puzzle / 1.000 cell; CodeCarbon `distill-maze-seed0`;
+  ~0.043 kWh (37× less than Qwen-maze teacher).
+- 2026-04-? — `trm-att-maze-50ep-seed2` (M4) — 50-ep fine-tune from
+  HF init under updated `q_loss_weight=0.01` config; `best_puzzle_acc =
+  0.476`; CodeCarbon project local; ~1.063 kWh / 0.253 kg CO₂.
+  Improves over the §5.7 / §5.12 collapsed seed-2 (0.047) but does not
+  reach HF-eval 0.796; treat as methodology observation, not headline.
+- *(pending: GPT-2 Sudoku + Distill-GPT-2 Sudoku from M4, Llama / SmolLM
+  rows from M3 / M5 if they land)*
+
+**Track B status: in progress.** Will be flagged complete once the
+post-q-loss-fix maze 3-seed runs are filed and the LLM fleet has at
+least one row per assigned (model × task) cell that the report needs.
+
+#### Aggregator polling cadence (M4)
+
+- Every ~30 min while the user is active: re-scan
+  `C:\ml-trm-work\` and `results/runs/` for new `best.pt`,
+  `training_results.json`, `emissions.csv`.
+- Append rows to `results/summary_fixed.csv` when a new run lands.
+- Append a sub-entry above and to the report draft §5.1 / §5.3 only
+  when the row carries a numerical update vs the existing draft.
+- **Do not auto-resolve `report*.md` git conflicts.** If a teammate
+  edits the same paragraph concurrently, stop and append a `STOP:
+  conflict` line below with the file path and conflicting commit.
+
+#### Pending / blocking items for May 1
+
+- [ ] M1 (FDK) post-Fix-B maze 3-seed retrain numbers — needed for
+      Track B completion banner.
+- [ ] M3 / M5 LLM-fleet rows (Llama, SmolLM, GPT-2 if they retrain).
+- [ ] M2 figures into `results/figures/` — once present, cite by
+      filename in M+E draft.
+- [ ] Final ZIP build trigger (Track A complete + Track B complete).
+
+### 5.14 Contracts A + B — fleet-wide hardening (2026-04-28)
+
+Two contracts apply to every training run and every re-evaluation
+for the rest of the sprint. Both are documented inline here so any
+machine can rehydrate context from `findings.md` alone.
+
+#### Contract A — 30-min checkpoint redundancy save
+
+- Watchdog: `scripts/checkpoint_redundancy_watchdog.sh`. Verbatim
+  per the Apr-28 spec — separate process from the trainer, copies
+  every `*.pt`, `*.csv`, `*.json` from the run dir to
+  `C:/ml-trm-work/checkpoints to use/machine{N}/` every 1800 s.
+- Naming: `{run_name}__{YYYY-MM-DDTHHMM}__{original_filename}`
+  (double-underscore separator).
+- **Folder-name variance.** The Apr-28 contract specifies
+  `machineN` (no space) but the existing team practice — visible
+  in `machine 4/` created on 2026-04-27 — uses `machine N`
+  (with space). `scripts/aggregator_poll.py::detect_redundancy_snapshots`
+  accepts both forms (case-insensitive, optional space) so neither
+  rig has to rename anything. New folders should prefer the no-space
+  form per the spec; existing `machine 4/` stays as-is.
+- Launch every trainer through **`python start.py <task> <seed>`**
+  (or `python start.py status` first to confirm setup) so the
+  prebuilt sanity checks fire — venv presence, `requirements.txt`
+  hash match, wandb auth, HF checkpoint remap. Direct
+  `python main.py` invocations are forbidden in this sprint
+  because they skip the preflight (git pull --ff-only, kill stale
+  processes, back up `best.pt`).
+- Re-evals (5–30 min each) skip the watchdog (Contract A.5); copy
+  the resulting `eval_fixed/` set once at the end to
+  `C:/ml-trm-work/checkpoints to use/machine{N}/eval_fixed/`.
+- Coordination tag: append **`redundancy snapshot machine{N}`** to
+  any §5 entry that references a recovery from a watchdog snapshot.
+
+#### Contract B — Metric realism monitoring
+
+The original Maze evaluation reported **1.000 puzzle accuracy** for
+every LLM and distilled student. Root cause: the `mask_non_path:
+true` setting graded only path cells (~10–15 % of a 900-cell grid);
+a model that emits the path marker `o` at every cell scored a fake
+100 %. With `mask_non_path: false` (full-grid grading), the same
+checkpoints score **0/1000 puzzle, ~12.5 % cell** — close to the
+chance-on-path floor and far below TRM-Att's 79.60 % HF baseline.
+
+The thesis we report is *not* "LLMs are bad at puzzles" in absolute
+terms — it is **"LLMs learn slowly and inefficiently at structured
+reasoning, while TRM converges with orders of magnitude less
+compute."** That requires seeing slow-but-monotonic
+`val_cell_accuracy` rises with `val_puzzle_accuracy` pinned at
+zero. **TRM-Att Maze fine-tuning is out of scope this sprint
+(heavy compute, settled). TRM-Att Maze headline = HF baseline
+79.60 %.**
+
+##### §B.9 calibration anchor (M1, post-fix Maze re-eval)
+
+```
+Qwen Maze:           0/1000 puzzle, cell_acc = 0.125154   -> green flag
+Distill-Qwen Maze:   0/1000 puzzle, cell_acc = 0.125021   -> green flag
+```
+
+Within 0.02 pp of each other; student inherits teacher's spam-
+path-marker strategy. **Use as the calibration anchor for every
+subsequent Maze re-eval.** A post-fix Maze result with
+`puzzle_acc > 0.05` or `cell_acc > 0.20` is a §B.3 red flag —
+investigate before reporting.
+
+##### Coordination tags (grep-able from this file)
+
+- **`metric realism violation`** — any red-flag entry per §B.3
+  (puzzle_acc spike on LLM/distill, flat cell-acc, NaN loss,
+  ACT halt-head collapse, etc.). Run is suspect; do not cite in
+  headline tables until investigated.
+- **`viability gate passed`** — run cleared all five §B.7 checks
+  (in §B.2 ranges, loss plateaued, emissions row present, log has
+  one row per epoch, no red flags). Eligible for `summary_fixed.csv`
+  + headline tables.
+- **`redundancy snapshot machine{N}`** — entry references a
+  recovery from a Contract A watchdog snapshot.
+
+##### Track A entries under Contract B
+
+- 2026-04-2X — `qwen2.5-0.5b-maze-seed0-postfix` (M1 Track A re-eval) —
+  `mask_non_path: false`; **0/1000 puzzle, cell_acc 0.125154**;
+  source: M1 `eval_fixed/qwen-maze-postfix.json`; **viability gate
+  passed**; supersedes the PRE-FIX-B 1.000 row in
+  `summary_fixed.csv`. §B.9 calibration anchor (teacher).
+- 2026-04-2X — `distill-maze-seed0-postfix` (M1 Track A re-eval) —
+  `mask_non_path: false`; **0/1000 puzzle, cell_acc 0.125021**;
+  source: M1 `eval_fixed/distill-qwen-maze-postfix.json`;
+  **viability gate passed**; supersedes the PRE-FIX-B 1.000 row.
+  §B.9 calibration anchor (student); confirms the "distilled
+  student inherits teacher weakness" finding (§5.2) on a
+  non-saturated metric.
+- 2026-04-2X — `scripts/check_maze_split_contamination.py` (M1) —
+  no overlap detected between train/test splits of
+  `maze-30x30-hard-1k-aug`; rules out dihedral-augmentation leakage
+  as a confound for the LLM Maze numbers.
+
+##### Pre-launch sanity gate (`python start.py` already runs this for known tasks)
+
+For ad-hoc launches, paste before training:
+
+```python
+from src.utils.config import load_config
+cfg = load_config(<config_path>)
+assert cfg.data.dataset in {"sudoku", "maze"}
+if cfg.data.dataset == "maze":
+    assert getattr(cfg.data, "mask_non_path", True) is False, \
+        "Maze training MUST set mask_non_path: false"
+print("[Sanity] config OK; mask_non_path =",
+      getattr(cfg.data, "mask_non_path", "n/a"))
+```
+
+If the assertion fires, stop, log a `metric realism violation` line
+under §5.14, do not launch.
+
+##### Report scope narrowed (2026-04-28)
+
+Two row classes from the Tier-2 "valid with caveat" pile have been
+**dropped from the report's headline tables** by user instruction:
+
+- **Sudoku-Att from-scratch (item 07)** — was the §5.4 "when not to
+  train" MO4 ethics hook. §5.4 is removed from
+  `docs/report_methods_experiments_draft.md`; references to it
+  re-pointed to `findings.md` §2 (full forensic) and `findings.md`
+  §1 / §2 carry the narrative if it is reintroduced later. Figure 2
+  ("sudoku_att_rise_and_collapse.png") removed from the figures
+  list. Row tagged `not-for-headline` in
+  `results/summary_fixed.csv`.
+- **TRM-Att Maze 3-seed unstable (item 09)** — was a methodology
+  limitation row in §5.3. Removed from the §5.3 table. Three
+  per-seed rows (`trm-att-maze-seed{0,1,2}-finetune`) tagged
+  `not-for-headline` in `results/summary_fixed.csv`. The
+  `trm-att-maze-50ep-seed2-qfix` row is also tagged
+  `metric-realism-violation` because the train log shows
+  `avg_steps` pinned at the 16-step cap by epoch 10 (Contract B
+  §B.3 red flag — TRM halt-head failed to learn).
+
+**Rule for the rest of the sprint:** TRM-Att Maze headline = HF
+baseline 79.60 % only. Any TRM-Att Maze fine-tune attempt on this
+hardware is preserved as audit-trail data but does not appear in
+the report's headline tables. The §B.9 calibration-anchor LLM-Maze
+rows (Qwen + Distill-Qwen post-fix, both 0/1000 puzzle, ~12.5 %
+cell) carry the LLM side of the §5.3 cross-family comparison.
+
+---
+
 ## 6. ML Lead responsibilities — progress audit (2026-04-19)
 
 Mapping my five stated responsibilities to concrete evidence in the repo.
