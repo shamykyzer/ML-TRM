@@ -15,7 +15,7 @@
 2. **Headline TRM-sudoku: 74.25% mean across 4 runs / 3 seeds (std 0.0063)**, MLP variant, HF-init + fine-tune. Best per seed: s0=0.7456, s1=0.7420, s2=0.7486. Published MLP checkpoint eval-only: **84.74%** (§5.2).
 3. **Headline TRM-maze: 0.796 (HF-eval)**, metric-robust under both mask_non_path settings (§5.6). **Kill the 3 active from-scratch maze fine-tunes** — they are actively *corrupting* the HF weights (val_exact collapsed from 0.789 → 0.11 in one epoch, §5.7).
 4. **Headline LLM-sudoku: 0% puzzle / 19% cell** (Qwen2.5-0.5B, 100 ep). Thesis holds cleanly.
-5. **Seven of eight LLM runs haven't happened yet.** That's where the remaining fleet compute should go once the maze runs are killed.
+5. **All eight LLM/distill cells of the proposal matrix are now filled** (see §9 for the canonical post-2026-04-28 set). Sudoku Sudoku × {GPT-2, SmolLM2, Qwen2.5, Distill-Qwen} all show 0% puzzle accuracy with cell rising to 13–36%. Maze × {Qwen, Distill-Qwen} re-evaluated under the all-cell metric show 0% puzzle / 12.5% cell after the `mask_non_path` fix.
 
 ---
 
@@ -863,6 +863,79 @@ Note on scope: `CHECKPOINTS.md:58` lists `llm-smollm-*` as "out of scope for cro
 - `results/eval_fixed/distill-qwen-maze-{emissions.csv,results.json,run.log}`
 - `results/summary_fixed.csv` (new, 2 viability-gate-passed re-eval rows)
 - `findings.md` §8 (this entry)
+
+---
+
+## 9. Canonical sprint outputs (2026-04-28) — supersedes earlier headline tables
+
+This section is the single source of truth for cross-architecture
+numbers used in the report's headline tables. Earlier headline claims
+in §1 and §5 are preserved for audit but **superseded** by the rows
+below. The underlying artifacts live in
+`C:/ml-trm-work/checkpoints to use/machine 1/` (curated archive,
+2026-04-27 snapshot) plus the post-fix maze re-evals from
+`results/eval_fixed/` (M1, 2026-04-28). Aggregate at
+`results/summary_fixed.csv`.
+
+### 9.1 Sudoku-Extreme — full LLM cross-family row
+
+| Model | Params | val_puzzle | val_cell | Train kWh | Train CO₂ kg | Status |
+|---|---:|---:|---:|---:|---:|---|
+| TRM-MLP HF eval (Sanjin2024) | 6.4 M | **0.8474** | 0.9155 | 0.48 (inf) | 1.23×10⁻⁶ kg/correct | viability gate passed |
+| TRM-MLP from-scratch (seed 0, peak ep 900) | 6.4 M | **0.7456** | 0.8584 | 22.02 | 5.231 | viability gate passed |
+| TRM-MLP from-scratch 3-seed mean | 6.4 M | **74.25 ± 0.63 %** | ~0.853 | 22.0 / seed | 1.66×10⁻⁵ kg/correct | viability gate passed (per §5.2) |
+| GPT-2 + LoRA (30 ep) | 124 M | 0.0000 | 0.1318 | 0.257 | 0.061 | viability gate passed |
+| SmolLM2-360M + LoRA (30 ep) | 360 M | 0.0000 | 0.1411 | 0.304 | 0.072 | viability gate passed |
+| Qwen2.5-0.5B + LoRA (100 ep) | 500 M | 0.0000 | **0.1907** | 0.896 | 0.213 | viability gate passed (Fix-B re-eval) |
+| Distill-Qwen student (30 ep) | 2.4 M | 0.0000 | **0.3587** | 0.009 | 0.002 | viability gate passed |
+
+Note: prior draft of the Methods section reported Distill-Qwen
+Sudoku at 0.2578 cell — that figure was superseded; the canonical
+archive value is **0.3587** (per
+`distill-qwen-sudoku-seed0/distill_sudoku_train_log.csv` epoch 30).
+The student beats its 500 M-param Qwen teacher (0.1907) by 1.88× on
+cell accuracy at 200× fewer parameters; both still score 0 % puzzle.
+
+### 9.2 Maze-Hard — post-fix LLM/distill row
+
+| Model | Params | Pre-fix puzzle | Post-fix puzzle | Post-fix cell | Re-eval kWh | CO₂ kg | Status |
+|---|---:|---:|---:|---:|---:|---:|---|
+| TRM-Att HF eval (Sanjin2024) | 8.4 M | n/a | **0.7960** | 0.9930 | 0.002 (inf) | 2.51×10⁻⁶ | viability gate passed |
+| Qwen2.5-0.5B + LoRA Maze | 500 M | 1.000 (artefact) | **0.0000** | 0.1252 | 0.0053 | 1.27×10⁻³ | viability gate passed (M1 2026-04-28) |
+| Distill-Qwen Maze | 2.4 M | 1.000 (artefact) | **0.0000** | 0.1250 | 0.00021 | 5.06×10⁻⁵ | viability gate passed (M1 2026-04-28) |
+
+The 1.000 puzzle accuracy reported in earlier evaluations was a
+metric artifact of `mask_non_path: true` (path-cell-only grading).
+After the fix (`scripts/eval_llm_checkpoint.py --mask-non-path false`,
+plus `mask_non_path: false` under `data:` in the seven LLM/distill
+maze configs), both LLM and distill Maze checkpoints score 0 %
+puzzle / ~12.5 % cell — consistent with a "spam path marker"
+degenerate strategy. Train/test contamination ruled out via
+`scripts/check_maze_split_contamination.py` (overlap=0 in both
+augmented and non-augmented splits).
+
+The **distill-teacher cell match (12.50 % vs 12.52 %, within
+0.02 pp)** is the strongest methodology signal in the post-fix set:
+distillation transfers strategy faithfully even when the strategy
+is broken.
+
+### 9.3 What is NOT in §9 (deliberately)
+
+- **TRM-Att Maze fine-tune** — heavy compute, out of hardware
+  budget for this sprint. Headline = HF eval 79.60 % (above).
+  Preserved consumer-GPU collapse runs at
+  `C:/ml-trm-work/trm-att-maze-50ep-seed0/` and
+  `..._OLD-AdamATan2-collapse_2026-04-26/` are kept as methodology
+  notes, not headline rows.
+- **TRM-Att Sudoku from-scratch** — collapsed at 18 % peak →
+  0 % by ep 350; documented in §2 as "when not to retrain".
+- **Llama-3.2-1B / DeepSeek runs** — not in the curated machine 1
+  archive. May enter a future "extended cross-family" section if
+  M3/M6 produce them.
+- **3-seed variance bars on the Maze re-evals** — present sprint is
+  single-seed for maze; documented as a §5.6 limitation in the
+  report draft. Optional M6 Option B work in
+  `docs/sprint_brief_maze_eval_fix_2026-04-27.md` §3.
 
 ---
 

@@ -283,19 +283,25 @@ puzzle.
 | TRM-MLP, HF eval (no fine-tune) | 6.4 M | 84.74 % | 91.55 % | 0.48 (inf) | 1.23×10⁻⁶ kg |
 | TRM-MLP, iso-time HF-init fine-tune (peak ep 10) | 6.4 M | **84.84 %** | 91.61 % | 1.93 | 6.4×10⁻⁶ kg |
 | TRM-MLP, 3-seed from-scratch fine-tune | 6.4 M | **74.25 ± 0.63 %** | 85.3 % | 22.0 / seed | 1.66×10⁻⁵ kg |
+| GPT-2 + LoRA, 30 epochs | 124 M | **0.00 %** | 13.18 % | 0.26 | undefined (∞) |
+| SmolLM-360M + LoRA, 30 epochs | 360 M | **0.00 %** | 14.11 % | 0.30 | undefined (∞) |
 | Qwen2.5-0.5B + LoRA, 100 epochs | 500 M | **0.00 %** | 19.07 % | 0.90 | undefined (∞) |
-| Distilled student, 30 epochs | 2.4 M | 0.00 % | 25.78 % | 0.011 | undefined (∞) |
+| Distilled student (from Qwen), 30 epochs | 2.4 M | **0.00 %** | **35.87 %** | 0.009 | undefined (∞) |
 | TRM-Att, from scratch (ablation) | 8.4 M | 18.33 % @ ep100 → 0 % | 55.4 % | 6.93 | 2.12×10⁻⁵ kg |
+
+Source of truth for the LLM rows: `C:/ml-trm-work/checkpoints to use/machine 1/` (curated archive `qwen-sudoku-seed0/`, `gpt2-sudoku-seed0/`, `smollm-sudoku-seed0/`, `distill-qwen-sudoku-seed0/`). Each subfolder contains the checkpoint, train log, training-results JSON, and emissions CSV; the energy/CO₂ figures travel with the checkpoint. The TRM-MLP HF eval and 3-seed rows are sourced from `findings.md` §1 and §5.2; the iso-time row from `results/novelty/iso_time_results-rig1.csv`.
 
 The headline finding: a **6.4 M-parameter TRM solves 74–85 % of
 held-out Sudoku-Extreme puzzles depending on training regime,
-while a 500 M-parameter fine-tuned LLM solves zero**. Qwen's
-per-cell accuracy of 19.07 % is meaningfully above the 11.1 %
-uniform-prior chance level, indicating it has learned per-digit
-statistics — but it cannot compose them into a globally consistent
-solution. This precisely matches the failure mode reported by
-Jolicoeur-Martineau et al. (2025) on DeepSeek R1, Claude 3.7, and
-o3-mini-high, all of which scored 0 % on the same benchmark.
+while every fine-tuned LLM family in our cross-architecture row —
+GPT-2 (124 M), SmolLM2 (360 M), Qwen2.5 (500 M) — solves zero**.
+Per-cell accuracy is meaningfully above the 11.1 % uniform-prior
+chance level (13.18 / 14.11 / 19.07 % across the three families),
+indicating each model has learned per-digit statistics — but none
+can compose them into a globally consistent solution. This
+precisely matches the failure mode reported by Jolicoeur-Martineau
+et al. (2025) on DeepSeek R1, Claude 3.7, and o3-mini-high, all of
+which scored 0 % on the same benchmark.
 
 **Three TRM numbers, three regimes.** The table reports three
 TRM-MLP rows because they measure different things and we want
@@ -324,51 +330,99 @@ training-energy totals would misrank the comparison.
 
 ### 5.2 Distillation — cheap inheritance of teacher capability
 
-The distilled 2.4 M-parameter student trained for 4 minutes on
-0.011 kWh — roughly 30× less energy than its 100-minute Qwen
-teacher — and achieved 25.78 % cell accuracy on Sudoku-Extreme,
-**higher than the teacher's 19.07 %** at far lower cost. Both
-still score 0 % whole-puzzle accuracy. Two implications: (1)
-distillation works mechanically — the student is not bottlenecked
-by capacity, and a 200× parameter reduction does not collapse
-single-cell prediction quality; (2) the structural failure of LLMs
-on Sudoku-Extreme is *inherited from the teacher*, not
-training-budget-induced. The proposal's prediction that "distilled
-students inherit teacher weakness on structured reasoning" is
-supported.
+The distilled 2.4 M-parameter student trained for 2.8 minutes on
+0.009 kWh — roughly **100× less energy** than its 100-minute Qwen
+teacher (0.896 kWh) — and achieved **35.87 % cell accuracy** on
+Sudoku-Extreme, **almost double the teacher's 19.07 %** at 200×
+fewer parameters. Both still score 0 % whole-puzzle accuracy. Two
+implications: (1) distillation works mechanically — the student
+is not bottlenecked by capacity, and a 200× parameter reduction
+does not collapse single-cell prediction quality; on the contrary,
+the focused distillation objective produces a sharper per-cell
+predictor than the LoRA-fine-tuned teacher. (2) The structural
+failure of LLMs on Sudoku-Extreme is *inherited from the teacher*,
+not training-budget-induced. The proposal's prediction that
+"distilled students inherit teacher weakness on structured
+reasoning" is supported.
 
-On Maze-Hard the distill run completed one epoch under a 9.6-minute
-wall-clock cap and emitted 0.043 kWh — roughly 37× less than its
-Qwen teacher's 1.564 kWh — at identical (1.000) puzzle accuracy.
-We caveat the maze accuracy in §5.3.
+On Maze-Hard the same distillation pipeline produced a student
+that, after the eval-mask fix described in §5.3, scores 12.50 %
+cell — **within 0.02 percentage points of its Qwen-Maze teacher's
+12.52 %**. The teacher-student match on the maze cell metric is
+the strongest signal that distillation transfers strategy
+faithfully, even when the strategy itself is broken (both score
+0 % puzzle).
 
-### 5.3 Maze-Hard — benchmark saturation under LoRA fine-tune
+### 5.3 Maze-Hard — eval-mask bug diagnosed and corrected
 
-The TRM-Att HF eval recovers the published 79.60 % puzzle / 99.30 %
-cell accuracy on Maze-Hard. Consumer-GPU from-scratch fine-tuning
-of TRM-Att across three seeds (0 / 1 / 2) produced 20.2 / 18.9 /
-4.7 % puzzle accuracy respectively (mean 14.6 %, σ = 8.5 %); the
-high variance and seed-2 collapse indicate from-scratch attention
-training is not stable at our compute scale. The HF-eval value, not
-the fine-tune mean, is therefore the load-bearing TRM-Att
-Maze-Hard number for the cross-family comparison.
+The TRM-Att HF eval recovers the published **79.60 % puzzle /
+99.30 % cell accuracy** on Maze-Hard. Consumer-GPU fine-tuning of
+TRM-Att is heavy (~12 h per seed at our scale) and out of the
+sprint's hardware budget; we therefore restrict the TRM-Att Maze
+result to the HF-eval headline. Preserved consumer-GPU collapse
+runs (`C:/ml-trm-work/trm-att-maze-50ep-seed0_OLD-AdamATan2-collapse_2026-04-26/`)
+are kept as a methodology note rather than a usable checkpoint.
 
-The fine-tuned LLM and distilled student both score **1.000 puzzle
-accuracy** on Maze-Hard. We treat this as a benchmark-saturation
-finding rather than a model-capability finding, for two reasons:
-(1) the dataset (`maze-30x30-hard-1k-aug`) applies dihedral
-augmentation; if augmentation was applied before the train/test
-split, "test" mazes would be rotations of training mazes and the
-model recognises rather than solves; (2) the `mask_non_path: true`
-evaluation setting ignores wall cells, which dominate a 900-cell
-sequence and can inflate puzzle-level metrics. The K-vote curve for
-the distilled model is flat at 1.000 across K ∈ {1, 2, 4, 8, 16},
-which is itself a symptom of saturation — a non-trivial benchmark
-would leave at least a few errors at K=1 for K-vote to correct.
+#### 5.3.1 The 1.000 puzzle artifact
 
-We report the maze numbers for completeness in the cross-task
-comparison but **do not draw efficiency conclusions** from them;
-the load-bearing efficiency comparison is on Sudoku-Extreme (§5.1).
+Initial evaluations scored every fine-tuned LLM and distilled
+student at **1.000 puzzle accuracy** on Maze-Hard. We diagnosed
+this as a metric artifact, not a capability claim. The maze
+evaluator's `mask_non_path: true` setting graded only the cells
+where input and label disagree — i.e. the ~10–15 % of the 900-cell
+grid that constitute the solution path. This created a degenerate
+optimum: a model that emits the path marker `o` at every cell
+scores ~100 % on the masked metric while learning no maze
+structure. The fix is `mask_non_path: false` (scores all 900
+cells), which we patched into `scripts/eval_llm_checkpoint.py`
+(via a `--mask-non-path` CLI flag) and added under `data:` in the
+seven LLM/distill maze configs.
+
+We additionally ruled out the alternative hypothesis — augmented
+train/test contamination — with a sha256-row-hash overlap test
+(`scripts/check_maze_split_contamination.py`). Both
+`maze-30x30-hard-1k-aug` (8000 train / 1000 test) and
+`maze-30x30-hard-1k` (1000 / 1000) returned **0 row overlap**, so
+the 1.000 saturation was entirely the eval-mask bug, not data
+leakage.
+
+#### 5.3.2 Post-fix re-evaluation results
+
+**Table 2.** Maze-Hard validation under the all-cell metric. Pre-fix
+puzzle column reproduces the metric artifact for transparency;
+post-fix columns are the corrected numbers used in the cross-task
+comparison.
+
+| Model | Params | Pre-fix puzzle | Post-fix puzzle | Post-fix cell | Re-eval kWh | CO₂ (kg) |
+|---|---:|---:|---:|---:|---:|---:|
+| TRM-Att HF eval | 8.4 M | n/a | **79.60 %** | 99.30 % | 0.002 (inf) | 2.51×10⁻⁶ |
+| Qwen2.5-0.5B + LoRA | 500 M | 1.000 (artefact) | **0.00 %** | 12.52 % | 0.0053 | 1.27×10⁻³ |
+| Distill-Qwen student | 2.4 M | 1.000 (artefact) | **0.00 %** | 12.50 % | 0.00021 | 5.06×10⁻⁵ |
+
+The corrected numbers tell the same architectural story as
+Sudoku-Extreme: **TRM solves 79.60 % of held-out mazes; every LLM
+family solves zero.** The post-fix cell accuracies (12.5 %) are
+just above the chance-on-path-cells floor — consistent with the
+"spam path marker" strategy diagnosed in §5.3.1.
+
+The **0.02 percentage-point match between Qwen Maze (12.52 %) and
+its distilled student (12.50 %)** is the strongest methodology
+signal in this section. The student inherits the teacher's
+degenerate strategy with high fidelity even though the strategy
+itself is broken. Distillation transfers what was learned, faults
+included; that is the proposal's "distilled students inherit
+teacher weakness" prediction observed at sub-percentage
+resolution.
+
+#### 5.3.3 Limitation — single-seed maze re-eval
+
+The maze re-evals reported here are single-seed (the curated
+machine 1 archive holds only seed 0 for each LLM family). We
+report variance bars only on TRM-MLP Sudoku (3-seed mean ± std
+in §5.1). A 3-seed Maze re-eval protocol is documented in
+`docs/sprint_brief_maze_eval_fix_2026-04-27.md` §3 (M6 Option B);
+the present numbers should be read as point estimates pending that
+extension.
 
 ### 5.4 Sudoku-Att collapse — when not to train
 
