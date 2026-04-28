@@ -1,0 +1,63 @@
+# Qwen2.5-0.5B Sudoku LoRA retrain with Fix B
+#
+# Fix B (commit 58faf5c, 2026-04-26) lives in src/models/baseline_llm.py:
+# inputs are remapped from sudoku-ids 2..10 to GPT-2-style digit tokens
+# "1".."9" before the LLM embedding, and the loss is recomputed in the
+# 11-dim sudoku vocab. Pre-Fix-B adapters were trained against a loss in
+# the full LLM vocab (~50k tokens) — invalid signal. This config retrains
+# the Qwen Sudoku LoRA from scratch on the now-correct loss.
+#
+# Identical hyperparameters to configs/llm_qwen.yaml so this run is
+# directly comparable to M1's pre-Fix-B Qwen Sudoku result; the only
+# differences are the output paths so the new checkpoint doesn't overwrite
+# the pre-Fix-B one preserved at C:/ml-trm-work/novelty-qwen-sudoku-seed0/.
+#
+# Launch (M5):
+#   python main.py --mode train --config configs/llm_sudoku_fixb.yaml --seed 0
+#
+# Note on dataset: the user-supplied autonomous-agent prompt asked for
+# `sudoku-extreme-1k`; that path does not exist on this repo (only
+# `data/sudoku-extreme-full/` is provisioned). Using the full set keeps
+# this run comparable to M4's GPT-2/Distill-GPT-2 Fix-B numbers (also
+# trained on the full set) and to M1's pre-Fix-B Qwen Sudoku baseline.
+#
+# After this completes, configs/distill_qwen_sudoku.yaml is launched with
+# --checkpoint pointing at this run's best.pt to retrain the distilled
+# student against the Fix-B teacher.
+
+model:
+  model_type: llm_finetune
+  vocab_size: 11
+  seq_len: 81
+  num_classes: 11
+  llm_name: Qwen/Qwen2.5-0.5B
+  lora_r: 8
+  lora_alpha: 16
+  use_qlora: false
+
+training:
+  lr: 0.00005
+  betas: [0.9, 0.999]
+  weight_decay: 0.01
+  warmup_steps: 500
+  batch_size: 16
+  grad_accum_steps: 1
+  epochs: 30
+  use_wandb: true
+  wandb_project: TRM-LLM
+  wandb_entity: ""
+  log_interval: 10
+  save_interval: 20
+
+data:
+  dataset: sudoku
+  data_dir: data/sudoku-extreme-full
+  num_workers: 4
+
+seed: 42
+device: cuda
+# Non-OneDrive path per start.py preflight warning ("parallel runs on the
+# shared OneDrive would corrupt each machine's checkpoints during upload.").
+# OneDrive intermittently locks .pyc/.pt files which causes Errno 22.
+checkpoint_dir: C:/ml-trm-work/llm-qwen-sudoku-seed0-fixb
+experiment_dir: C:/ml-trm-work/llm-qwen-sudoku-seed0-fixb

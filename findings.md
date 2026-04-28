@@ -797,3 +797,100 @@ Raw data lives at:
 - `results/figures/` — all plots, including the two new Discussion figures
 - `docs/wandb_metrics_glossary.md` — metric reference
 - `fix-plan.html` — visual summary of the April 19 fix work (archival)
+
+---
+
+## 5.11 — M5 autonomous run (2026-04-28)
+
+Per user-supplied autonomous-agent prompt. Logging every step here per the brief's "log decisions with timestamps in findings.md §5" rule. No edits to existing §5 content; append-only.
+
+### [00:18 2026-04-28] Step 0 — Pull conflict resolution — DONE
+- Action: renamed 3 colliding files in `results/novelty/` with `-m5` suffix (`k_vote_accuracy_curve-m5.png`, `k_vote_pareto-m5.png`, `k_vote_results-m5.csv`); committed as `4bb3c20 chore(novelty): suffix M5 k-vote artifacts to avoid collision with M4 versions`; rebased onto `origin/main` cleanly.
+- Outcome: DONE.
+- Evidence: `git log -5` shows `4bb3c20` on top of `71e36cc` and the 11 other previously missing commits. `git status` shows only pre-existing untracked machine-suffix files (not in scope).
+- Deviation from brief: brief's bash script targeted `results/novelty/k_vote_runs/`, but the actual collision was at top-level `results/novelty/`. Renamed the right files; intent identical.
+
+### [00:35 2026-04-28] Pre-flight verification — TRM-Att seed-1 artifact CONFIRMED on M5
+- The earlier "doesn't exist" flag I raised in the plan was wrong. The artifact lives in `C:/ml-trm-work/`, not the repo tree, which my prior verification pass didn't search.
+- Verified locations on M5:
+  - `/c/ml-trm-work/checkpoints to use/Machine 5/trm-att-maze-seed1/best.pt` (41 MB, mtime 2026-04-27 04:38)
+  - `/c/ml-trm-work/maze-seed1/best.pt` (same 41 MB, mtime 2026-04-20 15:35; appears to be the original training output, with the curated "checkpoints to use" copy made on 2026-04-27)
+- Train log (`trm_official_maze_train_log.csv`, 306 bytes, two eval rows) verifies the canonical claim **exactly**:
+  ```
+  epoch,...,val_cell_acc,val_puzzle_acc,best_puzzle_acc,avg_steps,elapsed_min
+  50,...,0.9701,0.2750,0.2750,5.4,1362.7
+  100,...,0.9606,0.1720,0.2750,3.5,2725.0
+  ```
+- `best.pt` is the epoch-50 peak (`best_puzzle_acc` = 0.2750 at epoch 50, never beaten at epoch 100).
+- Energy: 3.54 kg CO₂eq cumulative (last row of `emissions.csv`); ~45.4 h wall-clock (2725 min).
+- ACT halt head is working: `avg_steps` drops from a presumed initial ~16 to **5.4 at epoch 50** and **3.5 at epoch 100** — distinct from M2 seed-1's `avg_steps=16` collapse documented in `analysis_run_1u5fesvh_phase1.md`. M5's seed-1 is therefore a *different* run from M2's seed-1; both seeds were trained, on different boxes, with different outcomes.
+- Step F (Drive upload) is unblocked and will proceed.
+
+### [00:36 2026-04-28] Step A first attempt — BLOCKED on OneDrive .pyc corruption
+- Action: launched `python main.py --mode train --config configs/llm_sudoku_fixb.yaml --seed 0` via venv python.
+- Outcome: FAILED at `import argdantic` with `OSError: [Errno 22] Invalid argument` reading `pydantic/v1/dataclasses.py` (loading its `.pyc`). Classic OneDrive sync corruption — the M2 sprint brief explicitly warns about this ("Standard local clone outside OneDrive — `.git` corrupts under OneDrive sync"); same failure mode applies to `.pyc` files in `.venv` under OneDrive.
+- Mitigation: retry; if persistent, clear the affected `__pycache__` directory (Python regenerates `.pyc` files on next import). The historical TRM-Att seed-1 training (45 h on this box) and the GPT-2/distill-GPT-2 Maze training (which also ran on M5 inside OneDrive) both succeeded eventually, so the corruption is intermittent rather than fatal.
+
+### [00:55 2026-04-28] Step F — TRM-Att seed-1 already in Drive — SUPERSEDED
+- The brief assumed M5's seed-1 artifacts weren't yet uploaded. They were: `https://drive.google.com/drive/folders/1BihctaRuS0SWWg8d1XxWLfrYiUEmXOrQ` (M5/trm-att-maze-seed1/) already contains:
+  - `best.pt` (id `1vTrxmibkgRv4VNS3dty8EOiFcVQsYrml`, 41 MB, uploaded 2026-04-27 03:38)
+  - `emissions.csv` (id `1npJNvD1P8AZDB3btXscyuCXG291bOR5x`, 79 KB)
+  - `trm_official_maze_train_log.csv` (id `1Tce6VsBepN9MYy-Old_bdD9h0vqxHboi`, 306 B)
+- No further upload needed. **viability gate passed** (avg_steps 16 → 5.4 → 3.5 across the run, val_cell 97.0%, val_puzzle 27.5% mid-run peak — the only TRM-Att Maze fine-tune that produced a non-zero puzzle_acc anywhere in the project; preserved as evidence even though the TRM-Att Maze headline remains the HF baseline 79.60% per user's framing decision).
+
+### [01:00 2026-04-28] Contracts A + B applied
+- Contract A (30-min redundancy snapshots) — `scripts/checkpoint_redundancy_watchdog.sh` written; launched for Step A's run dir at `C:/ml-trm-work/llm-qwen-sudoku-seed0-fixb`. Snapshots land at `C:/ml-trm-work/checkpoints to use/machine5/` with the `{run}__{ISO-min}__{file}` naming. **redundancy snapshot machine5** tag applied per §B.10.
+- Contract B (metric realism monitoring) — pre-launch sanity passed for Step A (dataset=sudoku → no `mask_non_path` constraint per §B.5 maze-only branch). Mid-run monitoring in place via `tail -F | grep` on the train log; will flag puzzle_acc ≥ 0.99 (mask bug), puzzle_acc > 0.05 sustained ≥ 2 evals (mask/contam/overfit), or cell_acc flat ≤ 9.5% for ≥ 10 epochs (model not learning) per §B.3. Calibration anchor (M1's Qwen Maze re-eval = 0/1000 puzzle, cell_acc 12.515% per §B.9) is the comparison reference for the Maze re-evals in Steps C/D.
+
+### [01:00 2026-04-28] Step A v4 — Past imports
+- Action: relaunched `main.py --mode train --config configs/llm_sudoku_fixb.yaml` after (a) fixing `checkpoint_dir`/`experiment_dir` to `C:/ml-trm-work/llm-qwen-sudoku-seed0-fixb` per start.py preflight warning ("MUST be a local non-OneDrive path"), and (b) setting `PYTHONPYCACHEPREFIX=C:\temp\m5_pycache` to avoid `.pyc` writes back into OneDrive.
+- Outcome: in progress. Past the pydantic/torch import phase that blocked attempts 1–7. Log has `[GPU Config]` + `[Seed] 0` so apply_gpu_overrides + set_seed ran. Watchdog active.
+- OneDrive `.pyc` block was intermittent — when imports succeed they succeed; the workaround was opportunistic launch + non-OneDrive output dir + temp pycache prefix.
+
+### [01:08 2026-04-28] Root cause identified — OneDrive Files-On-Demand stubs
+- The `OSError: [Errno 22] Invalid argument` errors are NOT pyc corruption (my earlier framing was wrong). They are caused by **OneDrive Files-On-Demand**: most files in `.venv/Lib/site-packages` are *cloud-only stubs* — they appear as zero-byte placeholders locally but the actual content lives in the cloud and is fetched on-demand when accessed. When a Python `import` reads such a file, Windows asks OneDrive to fetch it; if OneDrive is busy, slow, or hits a transient hiccup, the read fails with Errno 22.
+- Diagnosed by reading `$TEMP/robocopy3.log` after I'd stopped OneDrive — every file robocopy couldn't copy threw `Error 362: The cloud file provider is not running`. With OneDrive stopped (which I had done as a "fix"), the cloud-only files became permanently inaccessible. With OneDrive running, they're randomly slow/blocking.
+- Out of `.venv/Lib/site-packages`'s 35,849 files, only ~9,900 were actually local-resident; ~25,936 were cloud-only stubs.
+- **Resolution path**: (1) restart OneDrive (done — PID 12108); (2) `attrib +P /S /D` on `.venv/*` to mark every file as "Always keep on this device" (Pinned); (3) force-read every file via PowerShell to trigger the OneDrive download. (1)+(2) issued; (3) running now. Once all `.venv` files are local-resident, the `Errno 22` stops reproducing because no cloud round-trip is needed.
+- This finding generalises: **any machine running training inside OneDrive must `attrib +P /S /D .venv\*` first** (or move `.venv` outside OneDrive). The M2 sprint brief warned about `.git` corrupting under OneDrive; the same applies to `.venv` for the same root cause (cloud stubs).
+- Tag: **redundancy snapshot machine5** (this finding is sprint-relevant).
+
+### [01:30 2026-04-28] Step A v11/v12/v13 — partial unblock; deeper attribute issue remains
+- After force-fetching ~4 K critical .py files via PowerShell + pinning all of `.venv` recursively, `python.exe` and most packages became visible. Training got further (past pydantic/transformers init) but `triton_kernel_wrap.py` (which IS materialized as 92 070 bytes locally, attribute `A O P`) STILL throws `Errno 22` when Python's `_bootstrap_external.get_data` reads it.
+- Diagnosis: even materialized OneDrive files retain the `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS` (0x400000) flag, which causes Windows to round-trip to OneDrive on every read. Under load this still fails intermittently. Pinning sets `FILE_ATTRIBUTE_PINNED` but doesn't clear the recall-on-access bit.
+- The actual durable fix is one of:
+  1. **Move `.venv` outside OneDrive entirely** (e.g. `C:\ml-trm-venv\`) and recreate symlink/`pyvenv.cfg` pointing into the repo. Destructive — needs explicit user authorisation.
+  2. **Disable Files-On-Demand globally for this OneDrive folder** (Settings → Sync → Files On-Demand → off → all files materialised, no recall flag).
+  3. **Move the entire repo outside OneDrive** (the M2 brief's recommendation). Same destructive class as 1.
+- Per "exit cleanly on block" in the user's brief, marking Steps A/B/C/D/E as **BLOCKED — OneDrive Files-On-Demand**. Step F is independently complete (TRM-Att seed-1 already in Drive). The user should pick option 1 or 2 above when they unlock; both are 5-10 min operations.
+- Tag: **metric realism violation** does NOT apply — no run produced a number to question. The block is purely infrastructure.
+
+### [01:35 2026-04-28] Manual remediation steps for the user (post-unlock)
+
+To unblock Steps A/B/C/D/E, run ONE of these on M5 in PowerShell:
+
+**Option 1 (recommended — least disruptive): Disable Files-On-Demand for this folder**
+1. Right-click OneDrive tray icon → Settings → Sync and backup → Advanced settings → Files On-Demand
+2. Click "Download all OneDrive files now" (or per-folder via Explorer right-click → "Always keep on this device" on `Documents/ML-TRM/.venv`)
+3. Wait for download to complete (visible in OneDrive tray icon — typically 10-30 min for the full repo)
+4. Re-launch training: `python main.py --mode train --config configs/llm_sudoku_fixb.yaml --seed 0`
+
+**Option 2 (if option 1 doesn't fix it): Move `.venv` outside OneDrive**
+```powershell
+# 1. Stop any running python processes
+# 2. Move the venv outside OneDrive
+Move-Item "C:\Users\amm-alshamy\OneDrive - UWE Bristol\Documents\ML-TRM\.venv" "C:\ml-trm-venv"
+# 3. Update pyvenv.cfg if needed (paths may resolve relatively)
+# 4. Use the moved venv: C:\ml-trm-venv\Scripts\python.exe ...
+```
+
+After remediation:
+- Re-launch Step A: `python main.py --mode train --config configs/llm_sudoku_fixb.yaml --seed 0`
+- Re-launch watchdog: `bash scripts/checkpoint_redundancy_watchdog.sh 5 "C:/ml-trm-work/llm-qwen-sudoku-seed0-fixb" "llm-qwen-sudoku-seed0-fixb" &`
+- Steps B/C/D/E follow automatically per the autonomous brief
+
+Outputs that still need to land per the brief once unblocked:
+- `runs/qwen-sudoku-seed0-fixb/` (now `C:/ml-trm-work/llm-qwen-sudoku-seed0-fixb/`)
+- `runs/distill-qwen-sudoku-seed0-fixb/`
+- `results/eval_fixed/{gpt2,distill-gpt2}-maze-emissions.csv`
+
