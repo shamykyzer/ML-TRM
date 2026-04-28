@@ -1,0 +1,7 @@
+run_id,label,task,model,config,epochs_completed,wall_clock_sec,kwh,emissions_kg,final_puzzle_acc,final_cell_acc,best_puzzle_acc,checkpoint_path,status,error
+1,trm-mlp-sudoku,sudoku,trm-mlp,configs/trm_official_sudoku_mlp.yaml,150,31415.3,1.9287,0.458250,0.6720,0.8246,0.8484,C:\ml-trm-work\novelty-trm-mlp-sudoku-seed0\latest.pt,ok,
+2,trm-att-maze,maze,trm-att,configs/trm_official_maze.yaml,10,26388.4,1.6789,0.398891,0.0850,0.9507,0.2050,C:\ml-trm-work\novelty-trm-att-maze-seed0\latest.pt,ok,
+3,qwen-sudoku,sudoku,qwen,configs/llm_qwen.yaml,0,0.0,0.0000,0.000000,0.0000,0.0000,0.0000,,skipped,
+4,qwen-maze,maze,qwen,configs/llm_qwen_maze.yaml,0,0.0,0.0000,0.000000,0.0000,0.0000,0.0000,,skipped,
+5,distill-sudoku,sudoku,distilled,configs/llm_qwen.yaml,0,0.0,0.0000,0.000000,0.0000,0.0000,0.0000,,skipped,
+6,distill-maze,maze,distilled,configs/llm_qwen_maze.yaml,0,0.0,0.0000,0.000000,0.0000,0.0000,0.0000,,skipped,
