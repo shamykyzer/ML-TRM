@@ -925,3 +925,27 @@ Outputs that still need to land per the brief once unblocked:
 - Watchdog re-launched at the new run dir per Contract A. Tag: **redundancy snapshot machine5**.
 - Expected per §B.2: `val_puzzle_acc = 0.000`, `val_cell_acc` rising toward 25–36 % (M4 distill-GPT-2 anchor 36.43 %; M1 distill-Qwen pre-Fix-B 25.78 %).
 
+### [16:15 2026-04-28] Step B — Distill-Qwen Sudoku Fix-B — DONE — **viability gate passed**
+- Total wall-clock: **2.88 min** (173 s); the student is tiny (2.4 M params) so an epoch is ~6 s.
+- Train log:
+
+  | epoch | train loss | val loss | val_puzzle_acc | val_cell_acc | wall (min) |
+  |---|---|---|---|---|---|
+  | 10 | 0.6828 | 1.7444 | 0.0000 | 29.09 % | 1.0 |
+  | 20 | 0.6297 | 1.6777 | 0.0000 | 34.67 % | 1.9 |
+  | **30** | **0.6185** | **1.6662** | **0.0000** | **35.63 %** | **2.9** |
+
+- Energy: **0.00218 kg CO₂eq, 0.00916 kWh** (project: `distill_sudoku`).
+- Calibration anchors:
+  - M4 distill-GPT-2 Sudoku Fix-B: 36.43 % cell → ours **35.63 %**, within **0.8 pp** (consistent — the two distilled-student Fix-B numbers across different teacher families land in the same band, which is what the report's "distill recovers per-token statistics regardless of teacher" framing predicts).
+  - M1 distill-Qwen Sudoku pre-Fix-B: 25.78 % cell → ours **35.63 %**, **+9.85 pp** improvement attributable to Fix B (the 11-dim vocab loss gives the teacher a non-degenerate gradient to distill from). This is paper-relevant.
+- §B.7 viability checklist:
+  1. Final `val_puzzle_acc` (0.0000) and `val_cell_acc` (35.63 %) within §B.2 expected ranges (puzzle = 0, cell rising slowly toward 25–36 %, landing at the upper edge with the cleaner Fix-B teacher). ✓
+  2. Training loss plateau (0.63 → 0.62 over the last 10 epochs). ✓
+  3. `emissions.csv` exists with non-zero `energy_consumed` (0.00916 kWh). ✓
+  4. `distill_sudoku_train_log.csv` has 3 eval rows + header, no NaN columns. ✓
+  5. No §B.3 red flag fired. ✓
+- All five conditions hold. Tag: **viability gate passed**.
+- Contract A: final post-trainer snapshot — 7 files copied to `C:/ml-trm-work/checkpoints to use/machine5/distill-qwen-sudoku-seed0-fixb__FINAL-*` (3 epoch checkpoints + latest + train_log + emissions + results). Tag: **redundancy snapshot machine5**.
+- Outputs: `C:/ml-trm-work/distill-qwen-sudoku-seed0-fixb/distill_sudoku_{latest,epoch_10,epoch_20,epoch_30}.pt` + train_log + emissions + results JSON.
+
