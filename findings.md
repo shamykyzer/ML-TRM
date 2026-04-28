@@ -894,3 +894,34 @@ Outputs that still need to land per the brief once unblocked:
 - `runs/distill-qwen-sudoku-seed0-fixb/`
 - `results/eval_fixed/{gpt2,distill-gpt2}-maze-emissions.csv`
 
+### [16:10 2026-04-28] Step A — Qwen Sudoku Fix-B retrain — DONE — **viability gate passed**
+- After OneDrive remediation (user took the option-1 path: Files-On-Demand → Download all), launched `python main.py --mode train --config configs/llm_sudoku_fixb.yaml --seed 0`. Wandb run: `9fo0plfw`. Run name: `llm_qwen2_5_0_5b_sudoku_seed0_STU-CZC5277FCM_1777384240`.
+- Trainable params: **737,280 / 494,770,048** (LoRA r=8 on Qwen2.5-0.5B). Batch 16, lr 5e-5, 30 epochs, eval every 10 epochs.
+- Train log (eval cadence every 10 epochs):
+
+  | epoch | train loss | val loss | val_puzzle_acc | val_cell_acc | wall (min) |
+  |---|---|---|---|---|---|
+  | 0  | — | 2.9802 | 0.0000 | 6.87 % | 0.0 |
+  | 10 | 2.0713 | 2.0615 | 0.0000 | 16.41 % | 39.3 |
+  | 20 | 1.9194 | 1.9149 | 0.0000 | 19.86 % | 59.5 |
+  | **30** | **1.8747** | **1.8723** | **0.0000** | **20.66 %** | **79.8** |
+
+- Energy: **0.0645 kg CO₂eq, 0.271 kWh, 79.8 min wall-clock** (RTX 5070, single GPU). Project: `qwen2.5_0.5b_sudoku_train`.
+- §B.7 viability checklist:
+  1. Final `val_puzzle_acc` (0.0000) and `val_cell_acc` (20.66 %) within §B.2 expected ranges (puzzle = 0, cell rising slowly toward 13–20 %; we landed just past the upper end which is still on-thesis — Fix B beats M1's pre-Fix-B Qwen Sudoku anchor 19.07 % cited in M4's `Drive: machine 4/README.md`). ✓
+  2. Training loss reached plateau (1.92 → 1.87 over the last 10 epochs). ✓
+  3. `emissions.csv` exists with non-zero `energy_consumed` (0.271 kWh). ✓
+  4. `qwen2.5_0.5b_sudoku_train_log.csv` has 4 eval rows + header, no NaN columns. ✓
+  5. No §B.3 red flag fired. ✓
+- All five conditions hold. Tag: **viability gate passed**.
+- Contract A: 4 in-flight 30-min snapshots + 1 final post-trainer snapshot (5 files: `latest.pt`, `epoch_20.pt`, `train_log.csv`, `emissions.csv`, `training_results.json`) under `C:/ml-trm-work/checkpoints to use/machine5/llm-qwen-sudoku-seed0-fixb__*`. Tag: **redundancy snapshot machine5**.
+- Outputs: `C:/ml-trm-work/llm-qwen-sudoku-seed0-fixb/qwen2.5_0.5b_sudoku_{latest,epoch_20}.pt` + train_log + emissions + training_results.
+
+### [16:10 2026-04-28] Step B — Distill-Qwen Sudoku Fix-B — LAUNCHED
+- Config `configs/distill_qwen_sudoku_fixb.yaml` written (clone of `distill_qwen_sudoku.yaml` with non-OneDrive output dirs).
+- Launched `python main.py --mode distill --config configs/distill_qwen_sudoku_fixb.yaml --checkpoint C:/ml-trm-work/llm-qwen-sudoku-seed0-fixb/qwen2.5_0.5b_sudoku_latest.pt --seed 0`.
+- Teacher: the freshly retrained Qwen Fix-B `latest.pt` from §16:10 entry above.
+- Student arch: 3-layer / 256-d / 1024-ff / 4-head transformer over the 11-class sudoku vocab (~2.4 M params per the existing distill config). lr 1e-3, batch 32, 30 epochs.
+- Watchdog re-launched at the new run dir per Contract A. Tag: **redundancy snapshot machine5**.
+- Expected per §B.2: `val_puzzle_acc = 0.000`, `val_cell_acc` rising toward 25–36 % (M4 distill-GPT-2 anchor 36.43 %; M1 distill-Qwen pre-Fix-B 25.78 %).
+
