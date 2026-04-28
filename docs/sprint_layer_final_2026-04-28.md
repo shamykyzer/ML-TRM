@@ -27,8 +27,51 @@ honour:
 ## BEGIN LAYER
 
 You have already read the machine-specific instructions above. Now read
-this layer and apply both contracts on top — they govern every training
-run and every re-evaluation in this sprint.
+this layer and apply all three contracts on top — they govern every
+training run and every re-evaluation in this sprint.
+
+# Contract 0 — Bootstrap via `start.py` (do FIRST, every session)
+
+Before any other action — before any training launch, before any
+re-eval, before any contamination check — run the project's
+stage-aware bootstrap once. It verifies (and where possible repairs)
+the venv, the `.env` file, wandb auth, the requirements lockstep, and
+the dataset downloads. The whole sprint depends on these stages being
+ready.
+
+```bash
+# Quick check: are all stages ready?
+.venv/Scripts/python.exe start.py status
+
+# Expected output for a healthy machine:
+#   [✓] venv     Python venv with CUDA torch
+#   [✓] sync     Venv matches requirements.txt
+#   [✓] env      Machine-local .env file
+#   [✓] wandb    wandb logged in
+#   [✓] transfer HF reference remapped + verified
+#   [✓] data     Sudoku + Maze datasets
+#   All blocking stages ready.
+```
+
+If any stage shows `[ ]` or `[✗]`, run the bootstrap (no args) to
+advance the next missing stage; re-run until all stages are green:
+
+```bash
+.venv/Scripts/python.exe start.py            # advances next missing stage and exits
+```
+
+`start.py` is the canonical setup path — installing requirements,
+setting up wandb auth from `.env`, downloading the Sudoku-Extreme + Maze
+datasets, and verifying the HF reference checkpoints all happen here.
+Do **not** reinvent these checks. If `start.py status` says everything
+is ready, every script in the sprint (training, re-eval, watchdog,
+contamination check) is safe to run; if it doesn't, **stop, fix the
+missing stage via `start.py`, and only then proceed**.
+
+If `start.py` itself fails (e.g. CUDA mismatch, no GPU, network error
+during data download), log the failure to `findings.md` §5 with
+`bootstrap failed on machineN` and stop — this is the only blocker that
+cannot be worked around in-session.
 
 # Contract A — 30-minute checkpoint redundancy save
 
