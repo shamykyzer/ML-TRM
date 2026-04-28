@@ -1,0 +1,25 @@
+[Eval] config     = configs/llm_maze_fixed.yaml
+[Eval] checkpoint = models/llm/gpt2_maze_latest.pt
+[Eval] llm_name   = gpt2
+[Eval] dataset    = maze
+[Eval] max_batches= 50 (subsample for speed)
+[Eval] building model...
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|##########| 148/148 [00:00<00:00, 13733.26it/s]
+W0428 18:45:15.060000 37732 .venv\Lib\site-packages\torch\utils\flop_counter.py:29] triton not found; flop counting will not work for triton kernels
+C:\Users\amm-alshamy\OneDrive - UWE Bristol\Documents\ML-TRM\.venv\Lib\site-packages\peft\tuners\lora\layer.py:2285: UserWarning: fan_in_fan_out is set to False but the target module is `Conv1D`. Setting fan_in_fan_out to True.
+  warnings.warn(
+[Eval] device = cuda
+[Eval] loading checkpoint...
+[Eval] building test loader...
+[Eval] mask_non_path = False  (False grades all 900 cells)
+[Eval] test_loader: 250 batches of 4 available, evaluating 50
+[Eval] batch 10/50: puzzle=0.0000 cell=0.2130 (0/40 puzzles)
+[Eval] batch 20/50: puzzle=0.0000 cell=0.2124 (0/80 puzzles)
+[Eval] batch 30/50: puzzle=0.0000 cell=0.2116 (0/120 puzzles)
+[Eval] batch 40/50: puzzle=0.0000 cell=0.2116 (0/160 puzzles)
+[Eval] batch 50/50: puzzle=0.0000 cell=0.2120 (0/200 puzzles)
+
+[Results] puzzles: 0/200 correct
+[Results] cells:   38121/179800 correct
+[Results] puzzle_acc = 0.000000
+[Results] cell_acc   = 0.212019

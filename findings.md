@@ -925,6 +925,28 @@ Outputs that still need to land per the brief once unblocked:
 - Watchdog re-launched at the new run dir per Contract A. Tag: **redundancy snapshot machine5**.
 - Expected per §B.2: `val_puzzle_acc = 0.000`, `val_cell_acc` rising toward 25–36 % (M4 distill-GPT-2 anchor 36.43 %; M1 distill-Qwen pre-Fix-B 25.78 %).
 
+### [18:42 2026-04-28] Step C v1 — GPT-2 Maze re-eval — **metric realism violation, fixed**
+- Brief expected `configs/llm_maze_fixed.yaml` from M1; M1 hadn't shipped after 2.5 h, so wrote it locally (`configs/llm_maze_fixed.yaml` based on `configs/llm_gpt2_maze.yaml` + explicit `data.mask_non_path: false`).
+- v1 invocation: `scripts/eval_llm_checkpoint.py configs/llm_maze_fixed.yaml models/llm/gpt2_maze_latest.pt 50` returned `puzzle 0/200, cell 0/22483` → **`metric realism violation`**: `total_cells_graded` was 22,483 ≈ 200 × 112 path cells (not 200 × 900 = 180,000), proving `mask_non_path: false` from config did NOT propagate. Root cause: `eval_llm_checkpoint.py` line 54 calls `get_maze_loaders(...)` with only 3 positional args, dropping the kwarg.
+- Fix: edited `scripts/eval_llm_checkpoint.py` to **force `mask_non_path = False` unconditionally** for re-evals (the Pydantic ExperimentConfig has `mask_non_path: bool = True` as default, so even `getattr(cfg.data, "mask_non_path", False)` returns True for any config that doesn't explicitly override it — can't be trusted at re-eval time).
+
+### [18:45 2026-04-28] Step C v2 — GPT-2 Maze re-eval — **viability gate passed**
+- Re-ran with patched eval script. Log: `[Eval] mask_non_path = False (forced; grades all 900 cells)`.
+- Result: **`puzzle 0/200 (0.000), cell 38121/179800 (21.202 %)`**. `cells_graded` = 179,800 = 200 × 899 ✓ (one position lost to causal-LM shift, expected).
+- §B.9 anchor comparison: M1 Qwen Maze post-fix = 0/1000 puzzle / 12.515 % cell. Our GPT-2 Maze = 0/200 puzzle / 21.202 % cell. Different model family (GPT-2 LoRA vs Qwen LoRA), so absolute cell-acc differs, but the puzzle=0 invariant matches → **`viability gate passed`**.
+- §B.3 dataset-contamination check: brief said "if puzzle ≥ 0.05 after `mask_non_path: false` → contamination flag → Step E retrain on clean `maze-30x30-hard-1k`". puzzle = 0 → contamination flag NOT triggered → **Step E skipped**.
+- Output log archived to `results/eval_fixed/gpt2_maze_eval_fixed_2026-04-28T1844.log`.
+
+### [18:48 2026-04-28] Step D — Distill-GPT-2 Maze re-eval
+- `eval_llm_checkpoint.py` only handles BaselineLLM (causal-LM with shift); the distilled student `src.models.distilled_llm.DistilledLLM` is encoder-only with a different state-dict layout. Wrote new `scripts/eval_distill_maze_checkpoint.py` mirroring the LLM eval but for the distill class (no causal shift; output[:, i] predicts label[:, i] directly).
+- v1 invocation hit the same Pydantic-default trap as Step C v1: `getattr(cfg.data, "mask_non_path", False)` returned True (because the field exists with default True), `mask_non_path = True` propagated to the loader, result was the saturated **`puzzle 1.000 / cell 1.000`** (`metric realism violation`). Patched `scripts/eval_distill_maze_checkpoint.py` to force False unconditionally same as the LLM eval script.
+- v2 result: **`puzzle 0/400 (0.000), cell 44991/360000 (12.498 %)`**. `cells_graded` = 360,000 = 400 × 900 ✓ (encoder-only model, no shift, all 900 positions counted).
+- §B.9 anchor: M1 Distill-Qwen Maze post-fix = 0/1000 puzzle / **12.502 %** cell. Ours: 0/400 puzzle / **12.498 %** cell — match within 0.004 pp. The student inherited the teacher's degenerate "spam path-marker `o` at every cell" strategy: the path-cell fraction (~12.5 %) is the floor that a model with this strategy hits. **`viability gate passed`**.
+- New file: `scripts/eval_distill_maze_checkpoint.py`. Edited file: `scripts/eval_llm_checkpoint.py` (force-False patch).
+
+### [18:50 2026-04-28] Step E — SKIPPED (gate not triggered)
+- Brief: "Conditional retrain — only if Step C shows GPT-2 still > 5 % (~5–7 h)". Step C v2 showed puzzle = 0 % → gate NOT triggered → Step E not needed.
+
 ### [16:15 2026-04-28] Step B — Distill-Qwen Sudoku Fix-B — DONE — **viability gate passed**
 - Total wall-clock: **2.88 min** (173 s); the student is tiny (2.4 M params) so an epoch is ~6 s.
 - Train log:

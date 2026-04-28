@@ -51,11 +51,19 @@ def main(config_path: str, ckpt_path: str, max_batches: int = 200) -> None:
     print("[Eval] building test loader...")
     if cfg.data.dataset == "maze":
         from src.data.maze_dataset import get_maze_loaders
+        # Force False unconditionally (Track A fix). The Pydantic
+        # ExperimentConfig has mask_non_path: bool = True as the default,
+        # so getattr() returns True for configs that don't override —
+        # which silently restores the path-cell-only metric (the bug).
+        # Re-eval scripts always want all-900-cell grading.
+        mask_non_path = False
         _, test_loader = get_maze_loaders(
             cfg.data.data_dir,
             batch_size=cfg.training.batch_size,
             num_workers=cfg.data.num_workers,
+            mask_non_path=mask_non_path,
         )
+        print(f"[Eval] mask_non_path = {mask_non_path} (forced; grades all 900 cells)")
     else:
         _, test_loader = get_sudoku_loaders(
             cfg.data.data_dir,

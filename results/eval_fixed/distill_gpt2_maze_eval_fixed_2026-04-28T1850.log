@@ -1,0 +1,23 @@
+[Eval] config     = configs/distill_gpt2_maze.yaml
+[Eval] checkpoint = models/distill_gpt2_maze/distill_maze_latest.pt
+[Eval] dataset    = maze
+[Eval] max_batches= 50
+[Eval] building distilled student...
+C:\Users\amm-alshamy\OneDrive - UWE Bristol\Documents\ML-TRM\src\models\distilled_llm.py:37: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+[Eval] params = 2,602,758
+[Eval] device = cuda
+[Eval] loading checkpoint...
+[Eval] building test loader (mask_non_path=False — grade all 900 cells)...
+[Eval] mask_non_path = False (forced; ignoring config)
+[Eval] test_loader: 125 batches of 8, evaluating 50
+[Eval] batch 10/50: puzzle=0.0000 cell=0.1238 (0/80 puzzles)
+[Eval] batch 20/50: puzzle=0.0000 cell=0.1245 (0/160 puzzles)
+[Eval] batch 30/50: puzzle=0.0000 cell=0.1252 (0/240 puzzles)
+[Eval] batch 40/50: puzzle=0.0000 cell=0.1251 (0/320 puzzles)
+[Eval] batch 50/50: puzzle=0.0000 cell=0.1250 (0/400 puzzles)
+
+[Results] puzzles: 0/400 correct
+[Results] cells:   44991/360000 correct
+[Results] puzzle_acc = 0.000000
+[Results] cell_acc   = 0.124975

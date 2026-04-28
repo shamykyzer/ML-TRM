@@ -1,0 +1,66 @@
+# Maze re-evaluation config with mask_non_path = false (Track A fix).
+#
+# Purpose: re-evaluate any LLM-LoRA Maze checkpoint with the corrected
+# eval-side metric. Original training-time eval used the inherited
+# src/utils/config.py:174 default `mask_non_path: True`, which zeros all
+# label cells where input == label (walls, S, G, empty) before the metric
+# is computed. Combined with the eval grading `mask = labels != 0`, this
+# silently degraded the metric to "grade only path cells", inflating
+# val_puzzle_acc to 1.000 across every maze LLM run.
+#
+# This config overrides the broken default to grade all 900 cells.
+#
+# Used by both Track A re-eval steps (M5-local artefacts):
+#   Step C — GPT-2 Maze    (models/llm/gpt2_maze_latest.pt)
+#   Step D — Distill-GPT-2 Maze re-eval pathway (separate, see Step D log)
+#
+# Calibration anchor (Contract B §B.9 — M1's Qwen+Distill-Qwen Maze re-evals):
+#   puzzle = 0/1000, cell ≈ 0.125 (just above the chance-on-path floor).
+# A re-eval that returns puzzle > 0.05 after this config is applied is the
+# §B.3 dataset-contamination red flag (rotated training mazes leaked into
+# the test split of maze-30x30-hard-1k-aug); proceed to Step E.
+#
+# Launch:
+#   python scripts/eval_llm_checkpoint.py configs/llm_maze_fixed.yaml \
+#       models/llm/gpt2_maze_latest.pt 50
+
+model:
+  model_type: llm_finetune
+  vocab_size: 6           # maze charset (#  SGo) + 0 pad
+  seq_len: 900            # 30x30 maze flattened
+  num_classes: 6
+  llm_name: gpt2          # max_position_embeddings=1024, fits seq_len=900
+  lora_r: 8
+  lora_alpha: 16
+  use_qlora: false
+  use_gradient_checkpointing: true
+
+training:
+  lr: 0.00005
+  betas: [0.9, 0.999]
+  weight_decay: 0.01
+  warmup_steps: 500
+  batch_size: 4           # 900-token sequences — keep small for eval too
+  grad_accum_steps: 4
+  epochs: 30
+  use_wandb: false        # eval-only, no need to spin up a wandb run
+  wandb_project: TRM-LLM
+  wandb_entity: ""
+  log_interval: 10
+  save_interval: 20
+
+data:
+  dataset: maze
+  data_dir: data/maze-30x30-hard-1k-aug
+  num_workers: 4
+  # THE FIX: grade all 900 cells of every maze, not just path cells.
+  # Default in src/utils/config.py:174 was True (the bug). Setting it
+  # false here makes the dataset return raw labels (no zeroing of
+  # non-path cells), so the eval-script grading mask `labels != 0`
+  # graders all 900 positions instead of the ~10–15% on the path.
+  mask_non_path: false
+
+seed: 42
+device: cuda
+checkpoint_dir: models/llm
+experiment_dir: experiments/llm
