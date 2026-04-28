@@ -1,0 +1,50 @@
+# Qwen2.5-0.5B + LoRA on Sudoku-Extreme — Fix-B retrain, seed 1
+# Companion to M5's existing seed-0 (`04_Qwen-0.5B_Sudoku_LoRA-100ep.pt`).
+# Together with `_seed2.yaml` produces 3-seed variance bars for the report,
+# mirroring the TRM-MLP 3-seed protocol from findings.md §5.12.
+#
+# "Fix-B" here = the digit-token remap landed in commit 58faf5c
+# (sudoku ids -> LLM digit tokens, loss recomputed in 11-dim vocab).
+# That fix is now unconditional in trainer_llm.py — no flag needed.
+#
+# Hyperparams match the M6 spec verbatim. Effective batch = 2 * 8 = 16,
+# matching the bs=16 grad_accum=1 setting M5 used for seed-0.
+
+model:
+  model_type: llm_finetune
+  vocab_size: 11
+  seq_len: 81
+  num_classes: 11
+  llm_name: Qwen/Qwen2.5-0.5B
+  lora_r: 8
+  lora_alpha: 16
+  use_qlora: false
+
+training:
+  lr: 5.0e-5
+  betas: [0.9, 0.999]
+  weight_decay: 0.01
+  warmup_steps: 500
+  batch_size: 2
+  grad_accum_steps: 8
+  epochs: 30
+  use_wandb: true
+  wandb_project: TRM-LLM
+  wandb_entity: ""
+  # Sudoku val set is the full 423k test split — one eval is ~7 min on RTX 5070,
+  # so eval-every-epoch would dominate wall-clock. Match M5's seed-0 cadence
+  # (log_interval=10) so the 30-epoch run fits the M6 budget. Contract B.6 mid-run
+  # gates fire at every log_interval row landing, i.e. 4 chances over 30 epochs.
+  log_interval: 10
+  save_interval: 10
+  emissions_project_name: qwen_sudoku_train_fixb_seed1
+
+data:
+  dataset: sudoku
+  data_dir: data/sudoku-extreme-full
+  num_workers: 4
+
+seed: 1
+device: cuda
+checkpoint_dir: C:/ml-trm-work/llm-qwen-sudoku-seed1-fixb
+experiment_dir: C:/ml-trm-work/llm-qwen-sudoku-seed1-fixb

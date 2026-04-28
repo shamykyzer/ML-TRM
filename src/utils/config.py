@@ -159,6 +159,12 @@ class TrainingConfig(BaseModel):
     # puzzle Sudoku — adds <1 s per eval.
     eval_trace_sample_size: int = 100
 
+    # Override the CodeCarbon project_name. Empty string = legacy behavior
+    # (trainer_llm.py defaults to f"{model_tag}_train"). Set this to file
+    # emissions under a run-specific tag (e.g. "qwen_sudoku_train_fixb_seed1")
+    # so multi-seed Fix-B runs are distinguishable in CodeCarbon's CSV.
+    emissions_project_name: str = ""
+
 
 class DataConfig(BaseModel):
     dataset: str = "sudoku"

@@ -100,6 +100,8 @@ TASK_DISPATCH = {
     "llm-gpt2-sudoku":   ("configs/llm_config.yaml",        "", "GPT-2 (124M) LoRA on Sudoku"),
     "llm-smollm-sudoku": ("configs/llm_smollm.yaml",        "", "SmolLM2-360M LoRA on Sudoku"),
     "llm-qwen-sudoku":   ("configs/llm_qwen.yaml",          "", "Qwen2.5-0.5B LoRA on Sudoku"),
+    "llm-qwen-sudoku-fixb-seed1": ("configs/llm_qwen_sudoku_fixb_seed1.yaml", "", "Qwen2.5-0.5B LoRA on Sudoku — Fix-B seed 1 (M6)"),
+    "llm-qwen-sudoku-fixb-seed2": ("configs/llm_qwen_sudoku_fixb_seed2.yaml", "", "Qwen2.5-0.5B LoRA on Sudoku — Fix-B seed 2 (M6)"),
     "llm-llama-sudoku":  ("configs/llm_llama.yaml",         "", "Llama-3.2-1B LoRA on Sudoku"),
     "llm-gpt2-maze":     ("configs/llm_gpt2_maze.yaml",     "", "GPT-2 (124M) LoRA on Maze"),
     "llm-smollm-maze":   ("configs/llm_smollm_maze.yaml",   "", "SmolLM2-360M LoRA on Maze"),

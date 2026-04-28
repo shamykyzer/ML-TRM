@@ -70,6 +70,20 @@ tasks:
     init_weights: ""
     approx_minutes: 20
 
+  - id: llm-qwen-sudoku-fixb-seed1
+    family: llm
+    label: "Qwen2.5-0.5B LoRA on Sudoku — Fix-B seed 1 (M6)"
+    config: configs/llm_qwen_sudoku_fixb_seed1.yaml
+    init_weights: ""
+    approx_minutes: 180
+
+  - id: llm-qwen-sudoku-fixb-seed2
+    family: llm
+    label: "Qwen2.5-0.5B LoRA on Sudoku — Fix-B seed 2 (M6)"
+    config: configs/llm_qwen_sudoku_fixb_seed2.yaml
+    init_weights: ""
+    approx_minutes: 180
+
   - id: llm-llama-sudoku
     family: llm
     label: "Llama-3.2-1B LoRA on Sudoku"

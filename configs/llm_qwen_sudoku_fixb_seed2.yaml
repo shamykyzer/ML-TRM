@@ -1,0 +1,38 @@
+# Qwen2.5-0.5B + LoRA on Sudoku-Extreme — Fix-B retrain, seed 2
+# Sibling of `llm_qwen_sudoku_fixb_seed1.yaml`. See that file for protocol
+# rationale.
+
+model:
+  model_type: llm_finetune
+  vocab_size: 11
+  seq_len: 81
+  num_classes: 11
+  llm_name: Qwen/Qwen2.5-0.5B
+  lora_r: 8
+  lora_alpha: 16
+  use_qlora: false
+
+training:
+  lr: 5.0e-5
+  betas: [0.9, 0.999]
+  weight_decay: 0.01
+  warmup_steps: 500
+  batch_size: 2
+  grad_accum_steps: 8
+  epochs: 30
+  use_wandb: true
+  wandb_project: TRM-LLM
+  wandb_entity: ""
+  log_interval: 10
+  save_interval: 10
+  emissions_project_name: qwen_sudoku_train_fixb_seed2
+
+data:
+  dataset: sudoku
+  data_dir: data/sudoku-extreme-full
+  num_workers: 4
+
+seed: 2
+device: cuda
+checkpoint_dir: C:/ml-trm-work/llm-qwen-sudoku-seed2-fixb
+experiment_dir: C:/ml-trm-work/llm-qwen-sudoku-seed2-fixb

@@ -536,6 +536,246 @@ After maze epoch 1 logs to wandb (~30 min in), check `val/exact_accuracy`:
 
 ---
 
+### 5.13 M6 sprint check-in — Sudoku Fix-B retrain decision (2026-04-28 00:18 UK)
+
+Pulled `main` at `71e36cc` (latest commit:
+`docs(post-mortem): M2 Phase 1 + Phase 2c cross-seed Sanjin-combo write-ups`).
+Sprint deadline 2026-05-01 17:00 BST. M6 = STU-CZC5277FDK (RTX 5070, 12 GB).
+
+**Step 1 — wait for M3 4-hour status: no entry found.**
+- §5 ends at §5.12 (2026-04-19). No newer §5.x entries from M3 anywhere on
+  origin/main, `feat/windows-bootstrap`, or `worktree-agent-af72f21d`.
+- `git log -- findings.md` shows no commits touching findings.md since the
+  M2 maze post-mortems landed.
+- Conclusion: M3's Llama Sudoku Fix-B 4-hour status has not yet been posted
+  by the time M6 came online. No explicit hand-off from M3.
+
+**Step 2 — default to Option B (Qwen Sudoku Fix-B seeds 1, 2).**
+Per the M6 instruction *"Default to Option B unless M3 explicitly hands off
+Llama in §5"* — defaulting to B.
+
+**Step 3 — execution blocked: spec ↔ repo mismatch.**
+The literal spec from M6 cannot be executed against current `main` without
+substitutions. Inventory:
+
+| Spec item                            | Repo state                                  |
+|--------------------------------------|---------------------------------------------|
+| `configs/llm_sudoku_fixb.yaml`       | does not exist (`configs/llm_qwen.yaml` is the closest match) |
+| `runs/qwen-sudoku-seed{1,2}-fixb/`   | `runs/` does not exist on M6                |
+| `dataset: sudoku-extreme-1k`         | only `data/sudoku-extreme-full` exists (1k train puzzles, misnamed) |
+| `fixb_shift_correction: true`        | not a config field; the digit-token remap from commit `58faf5c` is now unconditional in `trainer_llm.py` |
+| `train_split` / `eval_split`         | not config fields; loader uses fixed `train/` `test/` subdirs |
+| `eval_metric: exact_match`           | not a config field; trainer always logs `val/exact_accuracy` (puzzle_acc) and `val/cell_acc` |
+| `emissions_project_name: qwen_sudoku_train_fixb_seed{1,2}` | not a config field; `CarbonTracker(project_name=…)` is hard-coded in `trainer_llm.py:73` to `f"{model_tag}_train"` |
+| Llama `runs/llm-llama-sudoku-seed0/llama_3.2_1b_sudoku_latest.pt` (Option A) | not present locally; no `Drive/TRM-ML .chk` on this machine |
+| M5 step-A seed-0 config              | not visible on origin (no commit, no PR)    |
+
+The Fix-B *concept* is in the trainer (HF ignore-index remap +
+sudoku→digit-token vocab mapping from commit `58faf5c`), so a faithful
+seed-1/seed-2 run is achievable — but it requires an M6-authored config
+override and a small patch to make `CarbonTracker.project_name`
+config-driven (otherwise CodeCarbon emissions will be filed under
+`qwen2.5_0.5b_sudoku_train`, not `qwen_sudoku_train_fixb_seed{1,2}`).
+
+**Action — M6 paused, awaiting human go/no-go on the substitution plan.**
+Pausing rather than launching to avoid:
+
+1. Wasted GPU/energy on a 30-epoch run filed under the wrong CodeCarbon
+   project name (defeats the variance-bar purpose of the protocol).
+2. Polluting `runs/` with output that diverges from M5 seed-0's actual
+   step-A config — without M5's config visible, three "seeds" are not
+   strictly comparable.
+3. Duplicating M3's Llama work if M3's 4-hour entry lands later and
+   contains a hand-off.
+
+**Proposed substitution plan (await sign-off):**
+- Author `configs/llm_qwen_sudoku_fixb.yaml` overriding `llm_qwen.yaml`
+  with `batch_size: 2`, `grad_accum_steps: 8`, `lr: 5.0e-5`, `epochs: 30`,
+  `seed: 1` (and a sibling `…_seed2.yaml` with `seed: 2`).
+- Add `TrainingConfig.emissions_project_name: str = ""` and thread it
+  through `LLMTrainer.__init__` so `CarbonTracker(project_name=…)` honours
+  it when set. One-line change each in `src/utils/config.py` and
+  `src/training/trainer_llm.py`. Falls back to legacy naming when blank.
+- Run seeds sequentially on the RTX 5070 (12 GB free). With Qwen2.5-0.5B
+  + LoRA r=8 + bs=2 grad_accum=8, expect ~2.5–3 h per seed × 2 = ~6 h
+  total. Fits the M6 budget.
+
+**Verification deferred until execution begins.** No `runs/qwen-sudoku-…`
+artifacts exist yet. No CodeCarbon entries written yet. No commits or
+pushes by M6 in this session.
+
+---
+
+### 5.14 M6 Contract A + B integration + launcher path (2026-04-28 00:32 UK)
+
+After §5.13 the operator clarified: (1) Contract A (30-min checkpoint
+redundancy watchdog) and Contract B (metric realism gates) apply to every
+training run for the rest of the sprint; (2) launch via `python start.py
+<task-id> <seed>` so preflight, wandb auth, and requirements check run
+through the prebuilt CLI rather than `python main.py` directly. Plan
+updated below; all paths reconciled against the M4-authored
+`C:/ml-trm-work/checkpoints to use/machine 6/README.md` (the canonical
+sprint anchor at the time of this session).
+
+**Path reconciliation vs M6 prompt's `runs/...` strings:**
+
+| Prompt string                              | Used instead (canonical)                            | Source of canonical |
+|--------------------------------------------|-----------------------------------------------------|---------------------|
+| `runs/qwen-sudoku-seed1-fixb/`             | `C:/ml-trm-work/llm-qwen-sudoku-seed1-fixb/`        | Contract A.4 example uses `C:/ml-trm-work/llm-<model>-<task>-seed<n>/`; existing M4 dirs match this prefix. |
+| `runs/qwen-sudoku-seed2-fixb/`             | `C:/ml-trm-work/llm-qwen-sudoku-seed2-fixb/`        | same                |
+| `C:/ml-trm-work/checkpoints to use/machine6/` (Contract A.1) | created fresh per contract | Existing folder is `machine 6` (with literal space, M4 2026-04-27); creating `machine6` (no space) per Contract A.1 spelling. Old folder preserved untouched. |
+
+**Files M6 will create / patch (small, reversible, backwards-compat):**
+
+| File | Change | Reason |
+|---|---|---|
+| `configs/llm_qwen_sudoku_fixb_seed1.yaml` | NEW — overrides `llm_qwen.yaml` with `batch_size: 2`, `grad_accum_steps: 8`, `lr: 5.0e-5`, `epochs: 30`, `seed: 1`, `checkpoint_dir: C:/ml-trm-work/llm-qwen-sudoku-seed1-fixb`, `emissions_project_name: qwen_sudoku_train_fixb_seed1` | M6 prompt §B (Option B) |
+| `configs/llm_qwen_sudoku_fixb_seed2.yaml` | NEW — same but `seed: 2`, `…seed2` paths | M6 prompt §B |
+| `src/utils/config.py` | ADD `TrainingConfig.emissions_project_name: str = ""` (one line) | Make CodeCarbon project name config-driven so emissions are filed under the run-specific tag (`qwen_sudoku_train_fixb_seed1` etc.) instead of the legacy `f"{model_tag}_train"`. Empty default preserves existing trainer behaviour. |
+| `src/training/trainer_llm.py:73` | If `emissions_project_name` set, pass it to `CarbonTracker(project_name=…)` instead of `f"{model_tag}_train"` | Honour the new field |
+| `src/cli/bootstrap.py` `TASK_DISPATCH` | ADD `llm-qwen-sudoku-fixb-seed1` and `llm-qwen-sudoku-fixb-seed2` rows | So `python start.py llm-qwen-sudoku-fixb-seed1 1` works and the dashboard sees them |
+| `configs/tasks.yaml` | ADD same two task IDs | Required by `tests/test_tasks_yaml.py` (must mirror TASK_DISPATCH) |
+| `scripts/checkpoint_redundancy_watchdog.sh` | NEW per Contract A.4 verbatim | redundancy snapshot machine6 |
+
+**Contract B alignment for Qwen Sudoku (LoRA on a weak base, 30 ep):**
+- Expected `val_puzzle_acc` = 0.000 across all epochs (B.2). If it rises
+  above 0.05 sustained → red flag (B.3: mask bug / contamination /
+  overfit) — though Sudoku has no `mask_non_path` toggle so the most
+  likely cause would be eval bug or tiny-val overfit on the 1k train.
+- Expected `val_cell_acc` rises slowly from chance (1/11 ≈ 9.1%) toward
+  ~13–20% over 30 epochs. Calibration anchor: existing GPT-2 Fix-B
+  reached 13.28% cell at ep30; M5's existing 100-ep Qwen seed-0 reached
+  19.07% cell. So a healthy Qwen seed-1 at ep30 should land roughly
+  inside [GPT-2 Fix-B 13%, Qwen 100ep 19%] — closer to the bottom (it's
+  only 30 epochs vs seed-0's 100).
+- Mid-run monitoring per B.6: read `<run-dir>/qwen2.5_0.5b_sudoku_train_log.csv`
+  after each `log_interval` (default 10 epochs) and apply red-flag rules.
+- Post-run viability gate per B.7 will be applied before any row is added
+  to `results/summary_fixed.csv`.
+
+**Pre-launch sanity check (B.5) — Sudoku-specific adaptation:** the
+`mask_non_path` assertion is maze-only; for Sudoku the analogue is
+checking `cfg.data.dataset == "sudoku"` and `cfg.data.data_dir` resolves
+to the dataset that produced M5's seed-0 (i.e. `data/sudoku-extreme-full`,
+which holds 1k train + 423k test puzzles).
+
+**Smoke test plan (no GPU compute committed beyond ~30 s):** before
+launching either seed via start.py, run a Python-level forward pass:
+import `BaselineLLM`, build Qwen2.5-0.5B + LoRA(r=8, alpha=16), pull one
+batch of size 2 from the sudoku train loader, do `outputs = model(...)`,
+assert `outputs.loss` is finite. If pass → launch seed 1 via
+`python start.py llm-qwen-sudoku-fixb-seed1 1` with the watchdog already
+running in background. If fail → exit cleanly, log diagnosis, no
+launch.
+
+**Coordination tag preview:** the launch entry that lands here when
+training actually starts will carry `viability gate passed` (post-run)
+or `metric realism violation` (red flag) per B.10, plus `redundancy
+snapshot machine6` annotations as the watchdog snapshots.
+
+---
+
+### 5.15 M6 smoke test passed + launch (2026-04-28 ~01:00 UK)
+
+Smoke test (no trainer, just BaselineLLM + 1 sudoku batch + forward+backward):
+
+```
+torch=2.11.0+cu128 cuda=True dev=NVIDIA GeForce RTX 5070
+config: seed=1 llm=Qwen/Qwen2.5-0.5B bs=2 grad_accum=8
+emissions_project_name='qwen_sudoku_train_fixb_seed1'
+checkpoint_dir=C:/ml-trm-work/llm-qwen-sudoku-seed1-fixb
+model loaded in 18.8s (HF cache hit; symlinks-disabled warning is benign)
+params: trainable=737,280 / 494,770,048 (0.15%)  -> matches LoRA r=8
+loaders: train=500 val=211393 (val is full 423k test split)
+batch shapes: inputs=(2, 81)  labels=(2, 81)
+forward+backward OK: loss=2.8438 (finite; close to ln(11)≈2.40 chance)
+peak GPU mem 1.33 GB on RTX 5070 (12 GB free) -> headroom is huge
+```
+
+`python start.py status` reports all blocking stages green: venv, sync,
+env, wandb, transfer, data. Per the operator's directive, stage gates
+were verified through start.py before launch.
+
+**Pre-launch sanity check (Contract B.5 — Sudoku adaptation):**
+- `cfg.data.dataset == "sudoku"` ✓
+- `cfg.data.data_dir == "data/sudoku-extreme-full"` ✓ (the 1k-train-puzzle
+  split from §5.13's audit)
+- `mask_non_path` is maze-only — N/A for Sudoku, no assertion fired
+
+**OneDrive aside (this rig):** the venv lives on a OneDrive-synced path,
+which intermittently evicts files to "online-only" and breaks Python
+imports with `OSError: [Errno 22] Invalid argument`. Mitigated by
+force-materialising every `.py` in 31 critical packages
+(`torch httpx transformers huggingface_hub peft accelerate datasets
+tokenizers safetensors numpy pydantic yaml dotenv tqdm wandb codecarbon
+weave scipy pandas …`) via a PowerShell `[System.IO.File]::ReadAllBytes`
+loop. Total ~9.6k `.py` files materialised. Reproducer if it recurs:
+```pwsh
+$venv = "C:/Users/amm-alshamy/OneDrive - UWE Bristol/Documents/ML-TRM/.venv/Lib/site-packages"
+attrib -O +P "$venv\*.*" /S /D
+Get-ChildItem -Path $venv -Recurse -File -Filter *.py | ForEach-Object { $null = [System.IO.File]::ReadAllBytes($_.FullName) }
+```
+
+**Launch:** `bash scripts/launch_m6_qwen_fixb.sh both` runs seed 1 then,
+if seed 1 returns 0, seed 2. Each seed forks its own watchdog
+(`scripts/checkpoint_redundancy_watchdog.sh 6 …`) before the trainer
+starts and kills it after the trainer exits. Logs land at
+`/tmp/m6-{watchdog,train}-seed{1,2}.log`. Run dirs:
+- `C:/ml-trm-work/llm-qwen-sudoku-seed1-fixb/`
+- `C:/ml-trm-work/llm-qwen-sudoku-seed2-fixb/`
+
+Redundancy folder per Contract A: `C:/ml-trm-work/checkpoints to use/machine6/`
+(new — older `machine 6/` with literal space, M4 2026-04-27, preserved
+untouched).
+
+`redundancy snapshot machine6` annotations will appear in the watchdog
+log every 30 minutes. `viability gate passed` or `metric realism
+violation` will be appended here at run end per Contract B.10.
+
+---
+
+### 5.16 M6 convention correction + Drive sync (2026-04-28 ~01:15 UK)
+
+Operator correction: *"always use `C:\ml-trm-work\checkpoints to use\machine 6` instead"*
+(literal space, M4 2026-04-27 README convention) **overrides** Contract A.1's
+`machine6/` (no space) wherever the two conflict on this rig. Memory saved.
+
+Applied:
+- `scripts/checkpoint_redundancy_watchdog.sh:22` — `DEST` now uses
+  `machine ${MACHINE_N}` (with space).
+- `scripts/launch_m6_qwen_fixb.sh` — all destination references switched
+  to `machine 6` (with space). Empty no-space `machine6/` removed.
+- Trainer + watchdog killed and relaunched (no training progress lost —
+  only the train_log header had been written). New launcher pid then
+  forks fresh watchdog and trainer; watchdog log confirms snapshots now
+  go to `…/checkpoints to use/machine 6`.
+
+Operator further directive: outputs in `machine 6/` should match the
+M4 README naming convention (`<row>_<arch>_<task>_<note>.pt`) and the
+folder should be live-synced to
+`https://drive.google.com/drive/folders/18EXQL5h6MF5i8RbB4Zb97oU7wO9LXlbP`.
+
+Applied:
+- `scripts/launch_m6_qwen_fixb.sh` — at end of each seed (rc=0 only),
+  in addition to the Contract A.3 timestamped backup, copy the final
+  `latest.pt` + `train_log.csv` + `emissions.csv` + `training_results.json`
+  into M4 headline format:
+  - seed 1 → `04a_Qwen-0.5B_Sudoku_LoRA-FixB-seed1-{ep30,train_log,emissions,training_results}.{pt,csv,csv,json}`
+  - seed 2 → `04b_Qwen-0.5B_Sudoku_LoRA-FixB-seed2-{…}` (mirrors how `02b_`
+    is a variant of `02_` in the existing README table).
+  - rc≠0 → skip M4 copy (suspect runs do not claim a row in headline).
+- `~/bin/rclone.exe` installed (rclone v1.73.5). New script
+  `scripts/drive_sync_watchdog.sh` does
+  `rclone copy "<machine 6>" gdrive: --drive-root-folder-id 18EXQL5h6MF5i8RbB4Zb97oU7wO9LXlbP`
+  on a 30-minute loop (`--update --include '*.pt' '*.csv' '*.json' '*.md' '*.txt'`,
+  no deletes). Uses `copy` not `sync` so files added on Drive's side by
+  other machines are not deleted.
+- One-time human action required: `rclone config` to OAuth the `gdrive`
+  remote (browser opens, log in, allow). Once done, the sync watchdog
+  is started with `bash scripts/drive_sync_watchdog.sh > /tmp/m6-drive-sync.log 2>&1 & disown`.
+
+---
+
 ## 6. ML Lead responsibilities — progress audit (2026-04-19)
 
 Mapping my five stated responsibilities to concrete evidence in the repo.

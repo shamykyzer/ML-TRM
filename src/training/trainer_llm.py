@@ -69,8 +69,9 @@ class LLMTrainer:
         model_short = config.model.llm_name.split("/")[-1].lower().replace("-", "_")
         self.model_tag = f"{model_short}_{config.data.dataset}"
 
+        carbon_project = self.tc.emissions_project_name or f"{self.model_tag}_train"
         self.carbon = CarbonTracker(
-            f"{self.model_tag}_train",
+            carbon_project,
             output_dir=config.experiment_dir,
         )
 
