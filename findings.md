@@ -947,6 +947,56 @@ Outputs that still need to land per the brief once unblocked:
 ### [18:50 2026-04-28] Step E — SKIPPED (gate not triggered)
 - Brief: "Conditional retrain — only if Step C shows GPT-2 still > 5 % (~5–7 h)". Step C v2 showed puzzle = 0 % → gate NOT triggered → Step E not needed.
 
+### [18:55 2026-04-28] M5 output policy locked + Drive sync setup
+- **Policy** (per user directive 2026-04-28 ~14:50 BST): every M5 training/eval/distill run writes its outputs to **`C:\ml-trm-work\checkpoints to use\Machine 5\<run-name>\`** in the same per-run-dir structure already in use there (`gpt2-maze-seed0/`, `qwen-sudoku-seed0/`, `distill-sudoku-seed0/`, `trm-att-maze-seed1/`, …). Each run dir contains the `.pt` checkpoints, `*_train_log.csv`, `*_training_results.json`, and `emissions.csv`.
+- **Drive sync target**: https://drive.google.com/drive/folders/136RKcCjyouricNYxYqXEQhLXXYLxZWZ4 (the "machine 5" subfolder of "TRM-ML .chk", owned by shamyxor@gmail.com).
+- **Consolidation done now**: moved `C:/ml-trm-work/llm-qwen-sudoku-seed0-fixb/` and `C:/ml-trm-work/distill-qwen-sudoku-seed0-fixb/` into `Machine 5/`; moved watchdog snapshots from `checkpoints to use/machine5/` (lowercase) into `Machine 5/snapshots/`; updated configs to write future runs into the canonical path.
+- **Drive bulk push (one-shot, this session)**: 8 small artifacts uploaded via MCP into 3 new Drive subfolders (`llm-qwen-sudoku-seed0-fixb/`, `distill-qwen-sudoku-seed0-fixb/`, `eval_fixed/`):
+  - Step A: `qwen2.5_0.5b_sudoku_train_log.csv`, `qwen2.5_0.5b_sudoku_training_results.json`, `emissions.csv`
+  - Step B: `distill_sudoku_train_log.csv`, `distill_sudoku_results.json`, `emissions.csv`
+  - Step C/D: `gpt2_maze_eval_fixed_v2_2026-04-28T1850.log`, `distill_gpt2_maze_eval_fixed_2026-04-28T1850.log`
+- **Drive bulk push (`.pt` files)**: deferred — MCP `create_file` is base64-over-conversation-channel and won't fit the 10-MB / 991-MB checkpoints. Listed in the local manifest at `Machine 5/MANIFEST.txt`.
+- **`.pt` autosync — one-time setup the user runs once for permanent automation**:
+  ```powershell
+  winget install Rclone.Rclone        # ~1 min download/install
+  rclone config                       # interactive: pick "n" -> name it "gdrive" -> backend "drive" -> defaults -> browser auth -> no team drive
+  rclone lsd gdrive:                  # sanity check — should list user's Drive root folders
+  ```
+  Then every `bash scripts/sync_machine5_to_drive.sh` invocation automatically `rclone sync`s `Machine 5/` → `gdrive:TRM-ML .chk/machine 5/`. The watchdog calls this script after every snapshot cycle, so once rclone is configured the chain is fully autonomous.
+- **New scripts**:
+  - `scripts/sync_machine5_to_drive.sh` — backend-detecting (rclone → gdrive → manifest fallback) sync helper.
+  - `scripts/checkpoint_redundancy_watchdog.sh` — extended with a Drive-sync hook after each snapshot (no-op if no CLI installed; activates once rclone is configured).
+- Tag: **redundancy snapshot machine5** (covers the consolidation + sync setup).
+
+### [18:55 2026-04-28] Future-run launch reference (M5)
+After OneDrive remediation + this consolidation, the canonical M5 launch incantations are:
+
+```bash
+# Step A — Qwen Sudoku Fix-B retrain (writes to Machine 5/llm-qwen-sudoku-seed0-fixb/)
+PYTHONPYCACHEPREFIX="C:\\temp\\m5_pycache" .venv/Scripts/python.exe -B -u \
+    main.py --mode train --config configs/llm_sudoku_fixb.yaml --seed 0
+
+# Step B — Distill-Qwen Sudoku Fix-B (writes to Machine 5/distill-qwen-sudoku-seed0-fixb/)
+PYTHONPYCACHEPREFIX="C:\\temp\\m5_pycache" .venv/Scripts/python.exe -B -u \
+    main.py --mode distill --config configs/distill_qwen_sudoku_fixb.yaml \
+    --checkpoint "C:/ml-trm-work/checkpoints to use/Machine 5/llm-qwen-sudoku-seed0-fixb/qwen2.5_0.5b_sudoku_latest.pt" \
+    --seed 0
+
+# Watchdog (snapshots Machine 5/<run>/ → Machine 5/snapshots/, Drive-syncs after each)
+bash scripts/checkpoint_redundancy_watchdog.sh 5 \
+    "C:/ml-trm-work/checkpoints to use/Machine 5/llm-qwen-sudoku-seed0-fixb" \
+    "llm-qwen-sudoku-seed0-fixb" &
+
+# Step C/D — re-eval with mask_non_path forced false (writes results to results/eval_fixed/)
+PYTHONPYCACHEPREFIX="C:\\temp\\m5_pycache" .venv/Scripts/python.exe -B -u \
+    scripts/eval_llm_checkpoint.py configs/llm_maze_fixed.yaml \
+    "C:/ml-trm-work/checkpoints to use/Machine 5/gpt2-maze-seed0/gpt2_maze_latest.pt" 50
+
+PYTHONPYCACHEPREFIX="C:\\temp\\m5_pycache" .venv/Scripts/python.exe -B -u \
+    scripts/eval_distill_maze_checkpoint.py configs/distill_gpt2_maze.yaml \
+    "C:/ml-trm-work/checkpoints to use/Machine 5/distill-gpt2-maze-seed0/distill_maze_latest.pt" 50
+```
+
 ### [16:15 2026-04-28] Step B — Distill-Qwen Sudoku Fix-B — DONE — **viability gate passed**
 - Total wall-clock: **2.88 min** (173 s); the student is tiny (2.4 M params) so an epoch is ~6 s.
 - Train log:

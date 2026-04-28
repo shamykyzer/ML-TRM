@@ -60,5 +60,5 @@ data:
 seed: 42
 device: cuda
 # Non-OneDrive output paths — see findings.md §5.11 for why.
-checkpoint_dir: C:/ml-trm-work/distill-qwen-sudoku-seed0-fixb
-experiment_dir: C:/ml-trm-work/distill-qwen-sudoku-seed0-fixb
+checkpoint_dir: C:/ml-trm-work/checkpoints to use/Machine 5/distill-qwen-sudoku-seed0-fixb
+experiment_dir: C:/ml-trm-work/checkpoints to use/Machine 5/distill-qwen-sudoku-seed0-fixb
