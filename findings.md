@@ -536,6 +536,143 @@ After maze epoch 1 logs to wandb (~30 min in), check `val/exact_accuracy`:
 
 ---
 
+### 5.13 M3 sprint setup — Contracts A & B + Step B prep (2026-04-28)
+
+**Status:** Infrastructure for the 2026-05-01 sprint is in place. Step A
+(maze re-eval) blocked on M1. Step B (Llama Sudoku Fix-B retrain) ready
+to launch on operator trigger. No training launched in this setup
+session.
+
+#### Repo state — OneDrive checkout abandoned, working from `C:\dev\ML-TRM`
+
+The OneDrive checkout at `C:\Users\amm-alshamy\OneDrive - UWE
+Bristol\Documents\ML-TRM\` is **structurally corrupt**: 1169 `git fsck`
+errors, missing parent commit `5e9bdb0a…`, missing `.gitattributes`
+blob, and `git fetch` fails with `pack has 46 unresolved deltas`.
+Cause is OneDrive Files-on-Demand syncing and silently
+evicting/corrupting `.git/objects/`.
+
+The non-OneDrive clone at `C:\dev\ML-TRM\` is **healthy** (0 fsck
+errors, was 1 commit behind, fast-forwarded `8b868cb..71e36cc`). All
+M3 work continues from there. **Action for the team: do not run any
+git ops against the OneDrive checkout — it should be deleted next
+session.**
+
+#### Contract A wiring — `C:/ml-trm-work/checkpoints to use/machine3/`
+
+- Path realigned: previous `C:/ml-trm-work/checkpoints/machine 3/` →
+  `C:/ml-trm-work/checkpoints to use/machine3/` (matches §A.1).
+- The 4.6 GB curated bundle (HF baselines, k-vote, evaluations,
+  emissions, runs/, README) is intact at the new path.
+- Watchdog script: `scripts/checkpoint_redundancy_watchdog.sh` —
+  separate-process, 1800 s interval, double-underscore separator
+  exactly per §A.4.
+
+#### Contract B wiring — `scripts/contract_b_realism_check.py`
+
+Two modes:
+- `prelaunch <config.yaml>` — §B.5 config sanity, asserts maze configs
+  set `data.mask_non_path: false`. Exit code 2 = red flag.
+- `monitor <train_log.csv> --task --family` — §B.6 red-flag scan
+  (NaN/Inf loss, LLM puzzle_acc ≥ 0.99 = mask bug, sustained
+  puzzle_acc > 5%, cell_acc flat at chance ≥ 10 epochs, train_loss
+  flat ≥ 5 epochs, cell_acc monotone-decreasing ≥ 3 evals, TRM
+  avg_act_steps misbehavior) plus §B.7 viability gate against
+  §B.2 expected ranges.
+
+Smoke tests passed: TRM-MLP seed5 (puzzle 0.7268, cell 0.8513) returns
+**viability gate passed** at the §B.2 (TRM-MLP from-scratch) range.
+Llama-Sudoku 4-row log returns 0 flags fired (incomplete run is not
+a red flag in itself).
+
+#### Step A — Llama Maze re-eval — BLOCKED waiting for M1
+
+Polling for `configs/llm_maze_fixed.yaml` and
+`scripts/check_maze_split_contamination.py`: neither has landed on
+origin/main as of `71e36cc`. M1 still owns. The HF Maze-Hard remapped
+checkpoint at `hf_baselines/Maze-Hard/remapped_for_local.pt` already
+loads cleanly — the bottleneck is M1's config + contamination check
+landing.
+
+When they land:
+```bash
+python scripts/eval_llm_checkpoint.py configs/llm_maze_fixed.yaml \
+  C:/ml-trm-work/llm-llama-maze-seed0/llama_3.2_1b_maze_latest.pt 50 \
+  --emissions-out results/eval_fixed/llama-maze-emissions.csv \
+  --eval-metric exact_match
+```
+Apply Contract B §B.8: if `puzzle_acc` ≥ 0.05 after the mask fix is
+applied, that is **`metric realism violation`** — log here and route
+to M4 / M1 as a contamination flag. **Do not retrain Llama Maze
+under any circumstance** (per M3 brief, ~22 h does not fit budget).
+
+#### Step B — Llama Sudoku Fix-B retrain — READY TO LAUNCH
+
+Adapted the spec YAML to the repo's nested Pydantic schema:
+- `dataset: sudoku-extreme-1k` → `data.dataset: sudoku` +
+  `data.data_dir: data/sudoku-extreme-full` +
+  `data.subsample_size: 1000` (no `data/sudoku-extreme-1k/` dir
+  exists; the 1k subset is materialised via subsample_size, matching
+  the project proposal's "1,000 training samples" definition).
+- `fixb_shift_correction: true` is **informational**: the shift fix
+  is already permanent in `src/training/trainer_llm.py` lines
+  ~290–309 (`labels_shifted = labels[:, 1:]` is applied before
+  puzzle/cell accuracy, no flag needed).
+- `eval_metric: exact_match` is the trainer's native metric.
+- `emissions_project_name: llama_sudoku_train_fixb` — **not honoured**
+  by the trainer in its current form: `trainer_llm.py:72-73` hardcodes
+  `CarbonTracker(f"{model_short}_{dataset}_train", …)` which evaluates
+  to `llama_3.2_1b_sudoku_train`. Patching the trainer to read
+  `config.training.experiment_name` is a one-line change but it is a
+  shared file mid-sprint, so I have **left it unchanged** and will
+  rename the emissions file post-run for the report. **Note for M4:**
+  the Step B emissions row will be tagged `llama_3.2_1b_sudoku_train`,
+  not `llama_sudoku_train_fixb`.
+
+Files in place:
+- `configs/llm_sudoku_fixb.yaml` — full config, §B.5 sanity passed
+- `scripts/launch_step_b_fixb.sh` — single-command launcher that wires
+  up §B.5 sanity + start.py preflight + Contract A watchdog +
+  trainer + final snapshot + watchdog stop + §B.7 viability gate
+
+**To launch (operator trigger):**
+```bash
+cd C:/dev/ML-TRM
+bash scripts/launch_step_b_fixb.sh    # 5–7 h on RTX 5070
+```
+The launcher uses `start.py status` to authenticate wandb and verify
+requirements before constructing `LLMTrainer` directly with the new
+config (TASK_DISPATCH has no `llm-llama-sudoku-fixb` entry yet, and
+adding one mid-sprint is a shared-file change I avoided).
+
+`TRM_RIG=3` is set in `.env`; `RIG_FLEET_PLAN[3]` in
+`src/cli/bootstrap.py` lists small-fleet (Qwen-maze, SmolLM-maze,
+GPT-2-maze, SmolLM-sudoku, GPT-2-sudoku) — **the M3 brief overrides
+this fleet plan for this iteration** (M3 picks up Llama Sudoku
+Fix-B). Direct-launch by config path bypasses the rig-plan menu so
+this is fine.
+
+#### Coordination tags reserved for the run output
+
+When Step B finishes, append to this section:
+- **`viability gate passed`** — if §B.7 returns clean
+- **`metric realism violation`** — if any §B.3 red flag fires
+  (M4 greps for this string in the supplementary ZIP compile)
+- **`redundancy snapshot machine3`** — if a redundancy snapshot
+  needs to be referenced for a recovery scenario
+
+#### Step C — moot until Step B starts
+
+The 4-h handoff status with M6 fires at `start_time + 4h`. Since
+Step B has not started in this setup session, Step C is moot until
+the operator triggers `launch_step_b_fixb.sh`. M6 should treat M3 as
+"prep complete, awaiting trigger" until the watchdog log
+`/tmp/watchdog-machine3.log` shows snapshot activity.
+
+— logged by autonomous M3 agent, 2026-04-28
+
+---
+
 ## 6. ML Lead responsibilities — progress audit (2026-04-19)
 
 Mapping my five stated responsibilities to concrete evidence in the repo.

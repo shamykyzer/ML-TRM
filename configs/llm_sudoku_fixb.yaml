@@ -1,0 +1,63 @@
+# Llama-3.2-1B Sudoku Fix-B retrain (M3, sprint 2026-04-28 → 2026-05-01)
+#
+# Purpose: produce a viable Llama Sudoku LoRA artifact under the corrected
+# shift-aware eval logic that already lives in src/training/trainer_llm.py
+# (see lines ~290-309 — `labels_shifted = labels[:, 1:]` is applied before
+# puzzle/cell accuracy is computed). The previous Llama Sudoku run at
+# C:/ml-trm-work/llm-llama-sudoku-seed0/ was incomplete (4 epochs in the
+# train log) and is being superseded.
+#
+# Adapted from the M3 brief's flat YAML. Notable adaptations:
+#   * `dataset: sudoku-extreme-1k` → `data.dataset: sudoku` +
+#     `data.data_dir: data/sudoku-extreme-full` + `data.subsample_size: 1000`
+#     (no `data/sudoku-extreme-1k/` dir exists in this checkout; the 1k
+#     subset is materialised via subsample_size against the full corpus,
+#     matching the project proposal's "1,000 training samples" definition).
+#   * `fixb_shift_correction: true` is informational; the shift fix is
+#     already permanent in trainer_llm.py and doesn't need a flag.
+#   * `emissions_project_name: llama_sudoku_train_fixb` is preserved via
+#     `training.experiment_name` (CarbonTracker reads `experiment_name` →
+#     CodeCarbon project_name).
+#   * `eval_metric: exact_match` is the trainer's native metric; no flag
+#     needed (puzzle/cell exact-match is the default in trainer_llm.py).
+
+model:
+  model_type: llm_finetune
+  vocab_size: 11
+  seq_len: 81
+  num_classes: 11
+  llm_name: meta-llama/Llama-3.2-1B
+  lora_r: 8
+  lora_alpha: 16
+  use_qlora: false
+
+training:
+  lr: 0.00005          # 5.0e-5 per spec
+  betas: [0.9, 0.999]
+  weight_decay: 0.01
+  warmup_steps: 500
+  batch_size: 2        # spec
+  grad_accum_steps: 8  # spec — effective batch = 16
+  epochs: 30           # spec
+  use_wandb: true
+  wandb_project: TRM-LLM
+  wandb_entity: ""     # filled from .env (TRM_WANDB_ENTITY)
+  experiment_name: llama_sudoku_train_fixb  # → CodeCarbon project_name
+  log_interval: 10
+  save_interval: 5     # tighter checkpointing so Contract A snapshots
+                       # always have a recent .pt to copy
+
+data:
+  dataset: sudoku
+  data_dir: data/sudoku-extreme-full
+  subsample_size: 1000  # the "-1k" in the spec's dataset name
+  num_workers: 4
+
+seed: 0
+device: cuda
+
+# Trainer writes here; both are overridden by env in M3's .env so we land
+# on local C:/ml-trm-work/, not OneDrive. See Contract A: redundancy
+# snapshots are then pulled from this run dir into machine3/ every 30 min.
+checkpoint_dir: C:/ml-trm-work/llama-sudoku-seed0-fixb
+experiment_dir: C:/ml-trm-work/llama-sudoku-seed0-fixb
