@@ -774,6 +774,61 @@ Applied:
   remote (browser opens, log in, allow). Once done, the sync watchdog
   is started with `bash scripts/drive_sync_watchdog.sh > /tmp/m6-drive-sync.log 2>&1 & disown`.
 
+### 5.17 M6 seed 1 complete — Contract B.7 viability gate passed (2026-04-29 ~04:05 UK)
+
+Qwen-0.5B Sudoku Fix-B seed 1 (wandb run `w079srmr`) completed
+clean **rc=0** at 2026-04-29T04:01:59+01:00 after 540 min wall-time
+(launched 2026-04-28T19:01:42+01:00, 30 epochs end-to-end).
+
+Trajectory:
+
+| Epoch | Loss | ValLoss | Puzzle | Cell | Wall (min) |
+|---|---|---|---|---|---|
+| 0 (baseline) | — | 2.9791 | 0.0000 | 0.0687 | — |
+| 10 | 2.0398 | 2.0241 | 0.0000 | 0.1700 | 266 |
+| 20 | 1.9061 | 1.9018 | 0.0000 | 0.1953 | 403 |
+| 30 | 1.8535 | 1.8518 | 0.0000 | 0.2121 | 540 |
+
+**Contract B.7 verdict: viability gate passed.**
+
+Cell-level accuracy rose from baseline 6.87% (chance ≈ 1/11 = 9.1% on
+the 11-token digit subspace per Fix-B `58faf5c`) to 21.21% over 30
+epochs — the slow-from-chance trajectory Contract B.5 predicted.
+Puzzle remained 0% throughout, expected for Sudoku-Extreme on a
+1K-train + 0.5B-LoRA budget. Train ≈ Val (1.8535 vs 1.8518 at ep 30)
+— no overfitting. Loss crossed below ln(11)=2.398 between ep 0 and
+10, confirming LoRA redistributed mass onto the 11 digit tokens. No
+metric realism violation.
+
+Headline: **0 % puzzle / 21.21 % cell** — consistent with the prior
+Qwen-sudoku-seed0 (0 % / 19 % over 100 epochs in §6.4); the thesis
+*"LLMs can't compose Sudoku constraints even with LoRA"* strengthens
+with the second seed.
+
+**Anomaly logged.** The launcher's post-trainer block silently
+no-op'd: neither the Contract A.3 timestamped final snapshot
+(`__2026-04-29T0402__*` files) nor the M4-format canonical copies
+(`04a_*`) appeared in `machine 6/`, and neither the
+`M4-format canonical copies written` echo nor the
+`skipping M4 canonical copy` echo landed in `/tmp/m6-launcher.log` —
+the script jumped from `trainer exit code=0` straight to
+`final snapshot done` 7 s later. Manual `cp -p` from
+`llm-qwen-sudoku-seed1-fixb/` produced the four
+`04a_Qwen-0.5B_Sudoku_LoRA-FixB-seed1-{ep30,train_log,emissions,training_results}.{pt,csv,csv,json}`
+files (verified). Source files were intact and the watchdog's
+per-30 min Contract A.4 snapshots
+(`__2026-04-28T1931__` through `__2026-04-29T0401__`) cover the
+full trajectory regardless. Fallback script
+`scripts/m4_canonical_copy_seed.sh` staged for seed 2 — if the same
+bug repeats on seed 2 exit, run `bash scripts/m4_canonical_copy_seed.sh 2`
+to produce the `04b_*` files.
+
+**Seed 2** (run `m6ybb9gy`,
+`https://wandb.ai/shamykyzer/TRM/runs/m6ybb9gy`) auto-started at
+2026-04-29T04:02:07+01:00 per the launcher's
+`run_seed 1 && run_seed 2` chain. Watchdog pid 5806. ETA ~12:00 UK
+(based on seed 1's 540 min, less the long pre-train baseline pass).
+
 ---
 
 ## 6. ML Lead responsibilities — progress audit (2026-04-19)

@@ -6,8 +6,20 @@
 #   rclone config
 #   # n) New remote -> name: gdrive -> 13 (drive) -> client_id/secret blank
 #   # -> scope: 1 (full access) -> root_folder_id BLANK -> service_account_file BLANK
-#   # -> Edit advanced: n -> Use auto config: y -> browser opens, log in, allow
-#   # -> Configure as Shared Drive: n -> y) Yes this is OK -> q to quit
+#   # -> Edit advanced: n
+#   # -> Use auto config: n   (avoids Windows URL handler / Microsoft Store popup;
+#   #                          rclone prints the OAuth URL — paste into browser)
+#   # -> Configure as Shared Drive: y   (target folder lives in a team Shared Drive)
+#   # -> rclone lists available Shared Drives by number; pick the one containing
+#   #    folder 18EXQL5h6MF5i8RbB4Zb97oU7wO9LXlbP
+#   # -> y) Yes this is OK -> q to quit
+#
+# If you already finished `rclone config` answering "Configure as Shared Drive: n",
+# re-run `rclone config` -> e) edit existing -> gdrive -> step through and answer
+# `y` at the Shared Drive prompt. Or manually add `team_drive = <shared_drive_id>`
+# to the [gdrive] block in `~/.config/rclone/rclone.conf`. The Shared Drive's own
+# ID is the folder ID at the top of the drive (URL `…/folders/0A…`), NOT the
+# subfolder ID 18EXQL… below.
 #
 # Usage:
 #   bash scripts/drive_sync_watchdog.sh                       # default 30 min loop
@@ -34,14 +46,19 @@ if [ ! -x "$RCLONE_BIN" ]; then
     fi
 fi
 
-# Sanity-check that the remote was configured. Bail with instructions if not.
-if ! "$RCLONE_BIN" listremotes 2>/dev/null | grep -q "^${REMOTE_NAME}:$"; then
-    cat >&2 <<EOF
-[drive-sync] ERROR: rclone remote "${REMOTE_NAME}:" not found.
-Run \`rclone config\` once to add it (interactive — opens a browser for OAuth).
-Or set RCLONE_REMOTE=<your_remote_name> to use a different remote name.
-EOF
-    exit 1
+# Patient remote-existence check: wait until the remote is configured rather
+# than bailing. Lets the watchdog be started before OAuth finishes — it will
+# engage automatically the moment `rclone config` lands the gdrive remote.
+remote_ready() {
+    "$RCLONE_BIN" listremotes 2>/dev/null | grep -q "^${REMOTE_NAME}:$"
+}
+
+if ! remote_ready; then
+    echo "[drive-sync] $(date -Is) waiting for rclone remote '${REMOTE_NAME}:' (run \`${RCLONE_BIN} config\` once)..."
+    while ! remote_ready; do
+        sleep 30
+    done
+    echo "[drive-sync] $(date -Is) remote '${REMOTE_NAME}:' detected — entering sync loop"
 fi
 
 push_once() {
