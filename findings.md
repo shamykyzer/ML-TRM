@@ -829,6 +829,76 @@ to produce the `04b_*` files.
 `run_seed 1 && run_seed 2` chain. Watchdog pid 5806. ETA ~12:00 UK
 (based on seed 1's 540 min, less the long pre-train baseline pass).
 
+### 5.18 M6 seed 2 complete — Contract B.7 viability gate passed + cross-seed summary (2026-04-29 ~13:00 UK)
+
+Qwen-0.5B Sudoku Fix-B seed 2 (wandb run `m6ybb9gy`) completed
+clean **rc=0** at 2026-04-29T13:00:32+01:00 after 537 min wall-time
+(launched 2026-04-29T04:02:07+01:00, 30 epochs end-to-end).
+
+Trajectory:
+
+| Epoch | Loss | ValLoss | Puzzle | Cell | Wall (min) |
+|---|---|---|---|---|---|
+| 0 (baseline) | — | 2.9791 | 0.0000 | 0.0687 | — |
+| 10 | 2.0574 | 2.0462 | 0.0000 | 0.1662 | 263 |
+| 20 | 1.9013 | 1.8974 | 0.0000 | 0.2009 | 398 |
+| 30 | 1.8511 | 1.8492 | 0.0000 | 0.2152 | 537 |
+
+**Contract B.7 verdict: viability gate passed.**
+
+Same shape as seed 1 — slow rise from chance, no realism violation,
+train ≈ val. Identical baseline (0.0687) and near-identical final
+metrics (Cell 0.2152 vs seed 1's 0.2121; Loss 1.8511 vs 1.8535).
+Seed-controlled noise is tight; loss again crosses below ln(11)=2.398
+between ep 0 and 10. No metric realism violation.
+
+**Cross-seed summary — M6 contribution to the Qwen-0.5B-Sudoku-LoRA
+row of the headline table:**
+
+| Metric | seed 1 | seed 2 | mean | std |
+|---|---|---|---|---|
+| Puzzle | 0.0000 | 0.0000 | **0.0000** | 0.0000 |
+| Cell | 0.2121 | 0.2152 | **0.2137** | 0.0022 |
+| Loss | 1.8535 | 1.8511 | 1.8523 | 0.0017 |
+| ValLoss | 1.8518 | 1.8492 | 1.8505 | 0.0018 |
+| Wall (min) | 540 | 537 | 538.5 | 2.1 |
+
+Std on Cell is ≈ 0.2 pp — well below the inter-row gaps in the headline
+table. The two-seed result is publishable as-is. Headline:
+**0 % puzzle / 21.4 % cell** (Qwen-0.5B + LoRA Fix-B, 30 epochs, n=2).
+
+Compared to the §6.4 single-seed reference (Qwen-sudoku-seed0:
+0 % / 19.07 % over 100 epochs), Fix-B at 30 epochs already surpasses
+the un-fixed 100-epoch baseline on cell accuracy (21.4 % vs 19.07 %) —
+consistent with the digit-subspace correction in commit `58faf5c`
+freeing the LoRA delta to redistribute mass onto the 11 digit tokens
+without bleeding into the wider Qwen vocabulary.
+
+**Thesis confirmation:** Puzzle = 0 % across both seeds, the
+*invariance* the paper claims for general-purpose LLMs on
+Sudoku-Extreme. Cell ≈ 21 % shows the LoRA learned per-cell digit
+statistics but cannot compose the constraints. M6 strengthens the
+existing Qwen-sudoku-seed0 finding by adding cross-seed evidence and
+removing the Fix-A measurement artifact.
+
+### 5.19 M6 exit checklist verified (2026-04-29 ~14:35 UK)
+
+| Exit criterion | Status |
+|---|---|
+| Both seeds reach rc=0 | ✓ seed 1 04:01:59, seed 2 13:00:32 |
+| Contract B.7 applied to both | ✓ §5.17 (seed 1), §5.18 (seed 2) — both passed |
+| M4-format canonical files in `machine 6/` | ✓ 04a_* and 04b_* (4 files each, all four artifact types per seed) |
+| Source files in run_dir intact | ✓ `C:/ml-trm-work/llm-qwen-sudoku-seed{1,2}-fixb/` complete |
+| Contract A.4 redundancy snapshots | ✓ 30-min cadence held throughout (`__2026-04-28T19:31__` through `__2026-04-29T13:00__`, both runs) |
+| `findings.md §5` carries the audit trail | ✓ §§5.13-5.19 |
+| Branch `MACHINE-6` pushed to origin | ✓ HEAD `9c6eee9` (will advance after this commit) |
+| Drive sync engaged | ⏳ watchdog (pid 2220) still in patient mode — user OAuth pending. Non-blocking; watchdog will auto-engage on `rclone config` completion. M4-format files are already in place locally regardless. |
+
+**M6 sprint contribution complete.** Two-seed Qwen-0.5B Sudoku Fix-B
+runs delivered to the headline table; cross-seed variance bar
+established; thesis row verified at higher cell accuracy than the
+pre-Fix-B reference. Hand-off ready.
+
 ---
 
 ## 6. ML Lead responsibilities — progress audit (2026-04-19)

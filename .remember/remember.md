@@ -1,21 +1,24 @@
 # Handoff
 
 ## State
-- M6 Qwen Sudoku Fix-B **seed 1 done rc=0** at 2026-04-29T04:01:59+01:00 (wandb `w079srmr`, 540 min). Final epoch-30: Loss 1.8535 / ValLoss 1.8518 / Puzzle 0.0000 / **Cell 0.2121**. Contract B.7 **viability gate passed** (slow rise from chance 6.87% → 21.21%, no realism violation). Logged to `findings.md §5.17` (commit `a9ffe43` on `MACHINE-6`).
-- M6 **seed 2 in flight** (wandb `m6ybb9gy`, https://wandb.ai/shamykyzer/TRM/runs/m6ybb9gy) since 04:02:07 BST — auto-chained from seed 1 by `launch_m6_qwen_fixb.sh`. Watchdog pid 5806. ETA ~12:00 BST 2026-04-29.
-- **Launch script bug**: post-trainer block in `scripts/launch_m6_qwen_fixb.sh` silently no-op'd for seed 1 — neither `__2026-04-29T0402__*` nor `04a_*` files appeared, neither M4 success nor skip echo landed in `/tmp/m6-launcher.log`. Source files in run_dir intact; manual `cp` produced `04a_*` files. New fallback script `scripts/m4_canonical_copy_seed.sh {1|2}` staged for seed 2.
-- Drive sync watchdog (pid 2220) **still patient** — `rclone listremotes` returns "Config file not found" → user has not completed `rclone config` OAuth yet.
-- `AutoLock0830` daily Windows scheduled task active (08:30 BST daily, `rundll32 user32.dll,LockWorkStation`).
-- Monitors active: `bn248759b` (Contract B.6 + watchdog), `bfaqm4qv7` (drive sync engagement).
+- **M6 sprint contribution COMPLETE.** Both Qwen-0.5B Sudoku Fix-B seeds passed Contract B.7 viability gates with rc=0:
+  - seed 1 (wandb `w079srmr`): 0% puzzle / **21.21%** cell, 540 min, finished 2026-04-29T04:01:59+01:00
+  - seed 2 (wandb `m6ybb9gy`): 0% puzzle / **21.52%** cell, 537 min, finished 2026-04-29T13:00:32+01:00
+  - Cross-seed: Cell mean **0.2137** / std 0.0022 (tight). Headline: **0% puzzle / 21.4% cell**.
+- All 8 M4-format canonical files in `C:/ml-trm-work/checkpoints to use/machine 6/` (`04a_*` seed 1, `04b_*` seed 2, four artifacts each: `-ep30.pt`, `-train_log.csv`, `-emissions.csv`, `-training_results.json`).
+- `findings.md §§5.17-5.19` carries full audit trail (per-seed viability gates + cross-seed table + exit checklist).
+- Branch `MACHINE-6` will be ahead of origin after the commit being made now.
+- Drive sync watchdog (pid 2220) still in **patient mode** — `rclone listremotes` returns "Config file not found" → user has not completed `rclone config` OAuth yet. Non-blocking; watchdog will auto-engage on completion. M4 files are already local regardless.
+- `AutoLock0830` daily Windows scheduled task active.
 
 ## Next
-1. On seed 2 trainer exit (Monitor `bn248759b` will fire `[seed2] trainer exit code=`): apply Contract B.7 → append §5.18 to `findings.md` (task #10). **Preemptively run `bash scripts/m4_canonical_copy_seed.sh 2`** since the launch script's M4 block will likely no-op again.
-2. Verify `04b_Qwen-0.5B_Sudoku_LoRA-FixB-seed2-{ep30,train_log,emissions,training_results}.{pt,csv,csv,json}` landed in `C:/ml-trm-work/checkpoints to use/machine 6/`. Together with the existing `04a_*` files this completes the M4 headline-table contribution.
-3. Final exit-checklist entry to `findings.md §5` (task #4) once both seeds are ranked, then push to `MACHINE-6` and (only if user asks) open PR.
-4. **Maze track is degenerate** — investigation in this session found all 7 maze configs use `mask_non_path=true` default → constant-`o` predictor scores 100% puzzle_acc. Apr-22 Qwen-maze and Apr-23 distill runs both saturated trivially. Fix is `mask_non_path: false` in all 7 configs. User has not asked me to act on this; flag it again if they raise the maze track.
+1. **Optional**: open PR for `MACHINE-6` if M4 expects one. User instruction was push-only; PR not opened.
+2. **User action**: complete `rclone config` to finish Drive OAuth, then drive sync watchdog auto-engages and pushes the `04a_*`/`04b_*` files to the team Drive folder `18EXQL5h6MF5i8RbB4Zb97oU7wO9LXlbP`. Until then, M4 must `git pull` MACHINE-6 to get the canonical files via the repo (or accept that drive sync is offline until OAuth).
+3. **Maze track is degenerate** (separate finding from this session — `mask_non_path=true` default makes a constant-`o` predictor score 100% puzzle_acc). User dropped that thread. If they raise it again: 5-line config fix in all 7 maze configs + smoke test, then full re-run is the realistic path. Otherwise let Sudoku carry the headline.
+4. Launch script bug (`scripts/launch_m6_qwen_fixb.sh` post-trainer M4 block silently no-op'd on both seeds) — diagnosed but not patched. Fallback `scripts/m4_canonical_copy_seed.sh` covers the gap. Debug + fix is a post-deadline task (low priority since the fallback script worked twice).
 
 ## Context
 - `.venv/` is on a OneDrive-synced path; if `OSError: [Errno 22]` recurs on import, force-materialize via PowerShell `Get-ChildItem ... | ForEach-Object { [System.IO.File]::ReadAllBytes($_.FullName) }` (recipe in §5.15).
 - M3's Llama Sudoku Fix-B 4-hour status was never posted; M6 defaulted to Option B per spec. Don't switch to Option A retroactively.
-- Findings §§5.13-5.17 carry full audit trail; M4 greps `metric realism violation` / `viability gate passed` / `redundancy snapshot machine6`.
-- `MACHINE-6` is the active branch (HEAD `a9ffe43`, in sync with origin). PR not opened.
+- M4 greps `metric realism violation` / `viability gate passed` / `redundancy snapshot machine6` in `findings.md` to find each rig's contribution.
+- Coursework deadline: 2026-05-01 17:00 BST.
