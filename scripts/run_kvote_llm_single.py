@@ -40,9 +40,14 @@ def _build_test_loader(config, batch_size: int):
     """Mirror run_novelty_k_vote.py:_build_test_loader for the LLM path."""
     if config.data.dataset == "maze":
         from src.data.maze_dataset import get_maze_loaders
+        # mask_non_path=False mirrors the trainer's eval path (see main.py
+        # LLM_FINETUNE branch) — without it the K-vote scores against the
+        # path-cells-only mask and a degenerate 'output o everywhere' model
+        # would score 100% identical to a real solver.
         _, test_loader = get_maze_loaders(
             config.data.data_dir, batch_size=batch_size,
             num_workers=config.data.num_workers,
+            mask_non_path=False,
         )
     else:
         from src.data.sudoku_dataset import get_sudoku_loaders
@@ -68,6 +73,7 @@ def _build_model(config, ckpt: dict, device: str, kind: str):
             use_gradient_checkpointing=saved.get(
                 "use_gradient_checkpointing", config.model.use_gradient_checkpointing,
             ),
+            vocab_size=saved.get("vocab_size", config.model.vocab_size),
         )
         model.to(device)
         # strict=False per run_novelty_k_vote.py rationale (QLoRA absmax keys

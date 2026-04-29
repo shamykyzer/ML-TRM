@@ -34,6 +34,7 @@ def main(config_path: str, ckpt_path: str, max_batches: int = 200) -> None:
         lora_r=cfg.model.lora_r,
         lora_alpha=cfg.model.lora_alpha,
         use_qlora=cfg.model.use_qlora,
+        vocab_size=cfg.model.vocab_size,
     )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
@@ -51,10 +52,14 @@ def main(config_path: str, ckpt_path: str, max_batches: int = 200) -> None:
     print("[Eval] building test loader...")
     if cfg.data.dataset == "maze":
         from src.data.maze_dataset import get_maze_loaders
+        # mask_non_path=False: grade every cell, not just path-marked ones, so
+        # a model that outputs 'o' everywhere can't trivially hit 100%. Matches
+        # the LLM training-time loader (see main.py LLM_FINETUNE branch).
         _, test_loader = get_maze_loaders(
             cfg.data.data_dir,
             batch_size=cfg.training.batch_size,
             num_workers=cfg.data.num_workers,
+            mask_non_path=False,
         )
     else:
         _, test_loader = get_sudoku_loaders(

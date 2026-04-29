@@ -232,6 +232,7 @@ def _run_train_once(config: ExperimentConfig, resume: str = "", init_weights: st
             lora_alpha=config.model.lora_alpha,
             use_qlora=config.model.use_qlora,
             use_gradient_checkpointing=config.model.use_gradient_checkpointing,
+            vocab_size=config.model.vocab_size,
         )
         print(f"LLM trainable params: {model.trainable_param_count():,} / {model.total_param_count():,}")
 
@@ -240,10 +241,16 @@ def _run_train_once(config: ExperimentConfig, resume: str = "", init_weights: st
         # marking ignore positions; trainer_llm handles the HF -100 remap.
         if config.data.dataset == "maze":
             from src.data.maze_dataset import get_maze_loaders
+            # mask_non_path=False is the LLM-path fix for the maze reward-hacking
+            # loophole documented in maze_dataset.py: with the default True, only
+            # 'o' cells are graded, so a model that outputs 'o' everywhere hits
+            # 100% trivially. Forcing all 900 cells into the loss closes that.
+            # TRM keeps mask_non_path=True to preserve the published 79.6% number.
             train_loader, val_loader = get_maze_loaders(
                 config.data.data_dir,
                 batch_size=config.training.batch_size,
                 num_workers=config.data.num_workers,
+                mask_non_path=False,
             )
         else:
             from src.data.sudoku_dataset import get_sudoku_loaders
@@ -353,6 +360,7 @@ def _run_distill(config: ExperimentConfig, teacher_checkpoint: str) -> None:
             use_gradient_checkpointing=teacher_model_cfg.get(
                 "use_gradient_checkpointing", config.model.use_gradient_checkpointing
             ),
+            vocab_size=teacher_model_cfg.get("vocab_size", config.model.vocab_size),
         )
         # strict=False: bnb Linear4bit._load_from_state_dict consumes the
         # quant_state side-entries (weight.absmax / weight.quant_map /
@@ -384,10 +392,14 @@ def _run_distill(config: ExperimentConfig, teacher_checkpoint: str) -> None:
 
     if config.data.dataset == "maze":
         from src.data.maze_dataset import get_maze_loaders
+        # Same maze reward-hacking fix as the LLM_FINETUNE path: a student that
+        # outputs 'o' everywhere matches all graded cells when only path cells
+        # are graded. Force full-grid grading so distillation has a real signal.
         train_loader, val_loader = get_maze_loaders(
             config.data.data_dir,
             batch_size=config.training.batch_size,
             num_workers=config.data.num_workers,
+            mask_non_path=False,
         )
     else:
         from src.data.sudoku_dataset import get_sudoku_loaders
