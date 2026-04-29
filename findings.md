@@ -1093,3 +1093,46 @@ PYTHONPYCACHEPREFIX="C:\\temp\\m5_pycache" .venv/Scripts/python.exe -B -u \
 - main._run_distill reads `task` from the teacher's saved config (the new `task=` parameter is preserved on save via `config.model_dump()`), so the teacher loads with the maze vocab map automatically.
 - Distill student trains on the teacher's maze-aware logits + hard CE on the un-masked labels. Expected: cell ≈ teacher's 0.50 (the student inherits the wall-density floor); puzzle = 0 (no model at this scale solves a 30×30 maze).
 
+### [12:32 2026-04-29] Step D-v2 — DONE — student inherits wall+open-cell signal, blows past expectation
+- Wall-clock: **100.7 min** (1.68 h, 6041 s). Energy: **0.459 kWh, 0.109 kg CO₂eq** (UK grid; project `distill_maze`).
+- Train log:
+
+  | epoch | train_loss | val_loss | val_puzzle | val_cell | wall (min) |
+  |---|---|---|---|---|---|
+  | 5 | 0.2552 | 0.6938 | 0.0000 | 0.8728 | 16.7 |
+  | 10 | 0.2505 | 0.6866 | 0.0000 | 0.8728 | 33.4 |
+  | 15 | 0.2482 | 0.6884 | 0.0000 | 0.8727 | 50.3 |
+  | 20 | 0.2464 | 0.6828 | 0.0000 | 0.8728 | 67.1 |
+  | 25 | 0.2443 | 0.6808 | 0.0000 | 0.8729 | 83.9 |
+  | **30** | **0.2424** | **0.6764** | **0.0000** | **0.8729** | **100.7** |
+
+- **Surprise.** I expected the student to inherit the teacher's wall-density floor (0.50). Instead it scored **0.87** — which is consistent with the student copying input→output verbatim (wall cells, open cells, S, G are all unchanged from input to label; only path cells differ). The encoder-only architecture has bidirectional attention, so the student doesn't have to predict each cell from preceding context; it can directly observe the input and copy it. The teacher (causal LM) cannot do this.
+- **Decomposition of the 0.8729 cell metric.** Maze-30x30 has approximately: walls ~50%, open-non-path ~37%, path ~13%, S/G ~0.2%. A model that perfectly copies input→label (i.e. predicts space at *every* path cell instead of `o`) gets walls + open + S + G correct = ~87.3%. The student is doing exactly that — 0.8729 ≈ 1 − path-density. **Crucially `puzzle_acc = 0.0000`**: no maze has its path correctly marked.
+- Outputs: `C:/ml-trm-work/checkpoints to use/Machine 5/distill-gpt2-maze-seed0-v2/{distill_maze_latest.pt, distill_maze_epoch_{5,10,15,20,25,30}.pt, distill_maze_train_log.csv, distill_maze_results.json, emissions.csv}`.
+
+### [12:33 2026-04-29] v2 formal re-eval — both checkpoints under matched protocol
+- Eval protocol mirrors v1's §5.13 protocol exactly: `mask_non_path=False` forced, `max_batches=50`. GPT-2: 200 puzzles, distill: 400 puzzles.
+- Logs: `results/eval_fixed/gpt2_maze_v2_eval_2026-04-29T1233.log`, `results/eval_fixed/distill_gpt2_maze_v2_eval_2026-04-29T1234.log`.
+- **Final v1↔v2 comparison table (apples to apples, same eval protocol):**
+
+  | Model | Run | Cell acc | Puzzle acc | Cells correct / graded |
+  |---|---|---|---|---|
+  | GPT-2 maze | v1 | 0.2120 | 0/200 | 38121 / 179800 |
+  | **GPT-2 maze** | **v2** | **0.4985** | **0/200** | **89622 / 179800** |
+  | Distill GPT-2 maze | v1 | 0.1250 | 0/400 | 44991 / 360000 |
+  | **Distill GPT-2 maze** | **v2** | **0.8729** | **0/400** | **314247 / 360000** |
+
+- **Headline read for §5.3.** Under a methodologically clean protocol (vocab-aware token map + `mask_non_path=False` end-to-end training/eval), the LLM family on maze sits at the **wall-density** signal (~50%, GPT-2) and the **identity-mapping** signal (~87%, encoder-only distill student) — both **0% puzzle accuracy**. The §5.3 thesis ("LLMs cannot solve mazes within the LoRA budget") is now demonstrated under a protocol a reviewer cannot challenge on token-map or metric grounds. The v1 report numbers (1.000 puzzle for both — pre-Track-A) and the Track-A re-eval numbers (0.0/21%, 0.0/12.5% — confounded by the sudoku token map and the path-only training metric) are both superseded for the report's headline; v1 numbers stay in §5.13 as the methodological narrative.
+- **Total v2 sprint cost.** Train: 17,169 + 6,041 = **23,210 s ≈ 6.45 h** wall-clock; **1.70 kWh** energy; **0.404 kg CO₂eq** combined. Re-evals: ~5 min each, no separate emissions tracking.
+
+### [12:35 2026-04-29] v2 sprint — DONE
+- All five tasks in the rerun completed:
+  1. Vocab-aware `BaselineLLM` refactor (back-compat preserved). ✓
+  2. GPT-2 maze v2 retrain (cell 0.50, puzzle 0). ✓
+  3. Distill v2 retrain from v2 teacher (cell 0.87, puzzle 0). ✓
+  4. Formal re-eval of both v2 checkpoints under matched protocol. ✓
+  5. `docs/report_methods_experiments_draft.md` §5.6 — limitation (7) added covering the v1 methodology gap and the v2 retrain (option b of the user's dual hedge). ✓
+- Push: `MACHINE-5` at HEAD `ea8e0cd` (code+config+docs); a follow-up commit will land the eval logs + this final findings.md block.
+- M5 output policy honored: all v2 checkpoints/logs/emissions land under `C:/ml-trm-work/checkpoints to use/Machine 5/{gpt2,distill-gpt2}-maze-seed0-v2/`. Drive sync via the active distill watchdog→sync_machine5_to_drive.sh hook (now stopped post-completion).
+- Tag: **v2 retrain DONE — both viability gates passed; report-ready numbers locked in**.
+
