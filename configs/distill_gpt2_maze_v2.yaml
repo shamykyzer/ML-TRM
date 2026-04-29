@@ -1,0 +1,73 @@
+# Distill a small student from the v2 GPT-2 maze teacher.
+#
+# Pairs with configs/llm_gpt2_maze_v2.yaml. The teacher checkpoint
+# (gpt2_maze_latest.pt under that config's output dir) carries the
+# task-aware vocab map (#/_/S/G/o → real GPT-2 single-token ids) and
+# was trained under mask_non_path=False. main._run_distill reads
+# `task` from the teacher's saved config, so distillation routes
+# logits correctly through the maze vocab.
+#
+# Key differences from configs/distill_gpt2_maze.yaml (v1):
+#   1. data.mask_non_path: false — student loss matches teacher loss
+#      and §5.3 evaluation, closing the "spam o everywhere" loophole.
+#   2. Output dir lives under Machine 5/distill-gpt2-maze-seed0-v2/
+#      per the §5.13 M5 output policy.
+#
+# Launch (after the v2 teacher finishes):
+#   python main.py --mode distill \
+#     --config configs/distill_gpt2_maze_v2.yaml --seed 0 \
+#     --checkpoint "C:/ml-trm-work/checkpoints to use/Machine 5/gpt2-maze-seed0-v2/gpt2_maze_latest.pt"
+
+model:
+  model_type: llm_distill
+
+  vocab_size: 6           # maze charset (#  SGo) + 0 pad
+  seq_len: 900            # 30x30 maze flattened
+  num_classes: 6
+
+  # Teacher: GPT-2 base + LoRA r=8 (matches configs/llm_gpt2_maze_v2.yaml).
+  llm_name: gpt2
+  lora_r: 8
+  lora_alpha: 16
+  use_qlora: false
+  use_gradient_checkpointing: true
+
+  # Student (~2.4M params) — same shape as the v1 distill student
+  # so the comparison v1 vs v2 isolates the teacher quality.
+  distill_n_layers: 3
+  distill_d_model: 256
+  distill_ff_hidden: 1024
+  distill_n_heads: 4
+
+training:
+  lr: 0.001
+  betas: [0.9, 0.999]
+  weight_decay: 0.01
+  warmup_steps: 200
+  batch_size: 8           # 900-token sequences need a smaller batch
+  grad_accum_steps: 2     # effective batch 16
+  epochs: 30
+
+  distill_alpha: 0.7
+  distill_temperature: 4.0
+
+  use_wandb: true
+  wandb_project: TRM-LLM
+  wandb_entity: ""
+  log_interval: 5
+  save_interval: 5
+
+data:
+  dataset: maze
+  data_dir: data/maze-30x30-hard-1k-aug
+  num_workers: 4
+  # Match the teacher's training metric. Without this the student's
+  # hard-CE branch would still see the v1 path-only labels and
+  # collapse to "spam o everywhere" even though the teacher's KL
+  # branch is finally well-formed.
+  mask_non_path: false
+
+seed: 0
+device: cuda
+checkpoint_dir: C:/ml-trm-work/checkpoints to use/Machine 5/distill-gpt2-maze-seed0-v2
+experiment_dir: C:/ml-trm-work/checkpoints to use/Machine 5/distill-gpt2-maze-seed0-v2

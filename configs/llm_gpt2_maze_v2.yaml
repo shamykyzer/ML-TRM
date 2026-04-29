@@ -1,0 +1,63 @@
+# GPT-2 maze fine-tune v2 — methodologically clean retrain.
+#
+# Two material changes vs configs/llm_gpt2_maze.yaml (v1):
+#
+#   1. BaselineLLM task-aware token map — handled by code, not config.
+#      The vocab-aware refactor in src/models/baseline_llm.py routes maze
+#      cell ids (0..5) to semantic GPT-2 single-character tokens
+#      (`.`, `#`, `_`, `S`, `G`, `o`) instead of the sudoku digit map
+#      (`.`, `.`, `1`..`9`) that was applied to maze training in v1.
+#      Selected automatically because main.py now passes
+#      `task=cfg.data.dataset` to BaselineLLM(...).
+#
+#   2. data.mask_non_path: false — eliminates the "spam o everywhere"
+#      degenerate optimum that v1 training inherited from the dataset's
+#      default-True. Training metric now matches the eval metric used in
+#      configs/llm_maze_fixed.yaml, so the model is rewarded for getting
+#      walls/open/S/G right as well as path cells.
+#
+# Output dir: C:/ml-trm-work/checkpoints to use/Machine 5/gpt2-maze-seed0-v2/
+# (per the M5 output policy in findings.md §5.13).
+#
+# Launch:
+#   python main.py --mode train --config configs/llm_gpt2_maze_v2.yaml --seed 0
+
+model:
+  model_type: llm_finetune
+  vocab_size: 6           # maze charset (#  SGo) + 0 pad
+  seq_len: 900            # 30x30 maze flattened
+  num_classes: 6
+  llm_name: gpt2          # max_position_embeddings=1024, fits seq_len=900
+  lora_r: 8
+  lora_alpha: 16
+  use_qlora: false
+  use_gradient_checkpointing: true
+
+training:
+  lr: 0.00005
+  betas: [0.9, 0.999]
+  weight_decay: 0.01
+  warmup_steps: 500
+  batch_size: 4           # 900-token sequences — keep small
+  grad_accum_steps: 4     # effective batch 16
+  epochs: 30              # match v1 for direct comparison
+  use_wandb: true
+  wandb_project: TRM-LLM
+  wandb_entity: ""
+  log_interval: 5         # match the M5 sprint Apr-26 alignment
+  save_interval: 5
+
+data:
+  dataset: maze
+  data_dir: data/maze-30x30-hard-1k-aug
+  num_workers: 4
+  # THE OTHER FIX: training metric matches eval metric. v1 trained with
+  # the default (True) which masks all non-path cells in the loss → model
+  # finds the "predict o everywhere" optimum. False forces it to
+  # reconstruct the maze fully.
+  mask_non_path: false
+
+seed: 0
+device: cuda
+checkpoint_dir: C:/ml-trm-work/checkpoints to use/Machine 5/gpt2-maze-seed0-v2
+experiment_dir: C:/ml-trm-work/checkpoints to use/Machine 5/gpt2-maze-seed0-v2

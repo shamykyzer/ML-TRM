@@ -28,19 +28,29 @@ def main(config_path: str, ckpt_path: str, max_batches: int = 200) -> None:
     print(f"[Eval] dataset    = {cfg.data.dataset}")
     print(f"[Eval] max_batches= {max_batches} (subsample for speed)")
 
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"[Eval] device = {device}")
+
+    print("[Eval] loading checkpoint...")
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    # Read task from the saved checkpoint config so an old checkpoint trained
+    # against the sudoku-token map still loads correctly under the new
+    # vocab-aware BaselineLLM. Fall back to the eval-config's dataset if the
+    # checkpoint predates the `task` parameter being saved.
+    saved_task = (
+        ckpt.get("config", {}).get("data", {}).get("dataset", cfg.data.dataset)
+    )
+    print(f"[Eval] task       = {saved_task} (from checkpoint config; falls back to eval cfg)")
+
     print("[Eval] building model...")
     model = BaselineLLM(
         model_name=cfg.model.llm_name,
         lora_r=cfg.model.lora_r,
         lora_alpha=cfg.model.lora_alpha,
         use_qlora=cfg.model.use_qlora,
+        task=saved_task,
     )
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
-    print(f"[Eval] device = {device}")
-
-    print("[Eval] loading checkpoint...")
-    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
     # strict=False: bnb Linear4bit consumes weight.absmax / weight.quant_map /
     # weight.quant_state.bitsandbytes__nf4 to rebuild QuantState but leaves them
     # in the unexpected-keys set, so strict=True false-positives on every QLoRA

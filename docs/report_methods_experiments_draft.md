@@ -497,6 +497,20 @@ argue the LLM side has more diversity; we did not normalise.
 (6) **CodeCarbon estimates** are NVML-derived and exclude PSU
 losses; absolute kWh values are CodeCarbon estimates, but ranking
 across models on the same hardware is reliable.
+(7) **LLM maze v1 used a sudoku-derived token map.** Until the
+2026-04-29 v2 retrain, `BaselineLLM` hardcoded the Sudoku Fix-B
+character map (`.`/`.`/`1`..`9`) and applied it to maze training
+too, so maze cell types (`#`/`_`/`S`/`G`/`o`) were routed through
+arbitrary GPT-2 digit tokens with no semantic anchoring; v1 maze
+training also inherited the dataset's default `mask_non_path=True`,
+which is the "spam `o` everywhere" degenerate optimum noted in
+§5.3. The v2 retrain (`configs/llm_gpt2_maze_v2.yaml`) gives
+`BaselineLLM` a task-aware token map (`#`/`_`/`S`/`G`/`o` → real
+GPT-2 single-token ids `2`/`62`/`50`/`38`/`78`) and trains under
+`mask_non_path=False` so the training loss matches the §5.3
+evaluation. The 0 % puzzle / 21 % cell number for GPT-2 in §5.3
+remains the v1-protocol result; the v2 number is appended once
+training completes.
 
 ---
 

@@ -232,6 +232,7 @@ def _run_train_once(config: ExperimentConfig, resume: str = "", init_weights: st
             lora_alpha=config.model.lora_alpha,
             use_qlora=config.model.use_qlora,
             use_gradient_checkpointing=config.model.use_gradient_checkpointing,
+            task=config.data.dataset,
         )
         print(f"LLM trainable params: {model.trainable_param_count():,} / {model.total_param_count():,}")
 
@@ -240,10 +241,15 @@ def _run_train_once(config: ExperimentConfig, resume: str = "", init_weights: st
         # marking ignore positions; trainer_llm handles the HF -100 remap.
         if config.data.dataset == "maze":
             from src.data.maze_dataset import get_maze_loaders
+            # Honor cfg.data.mask_non_path so training metric matches eval
+            # metric. The Pydantic default is True (paper convention) which
+            # creates a "spam o everywhere" degenerate optimum. v2 maze
+            # configs set this to false explicitly.
             train_loader, val_loader = get_maze_loaders(
                 config.data.data_dir,
                 batch_size=config.training.batch_size,
                 num_workers=config.data.num_workers,
+                mask_non_path=config.data.mask_non_path,
             )
         else:
             from src.data.sudoku_dataset import get_sudoku_loaders
@@ -345,6 +351,10 @@ def _run_distill(config: ExperimentConfig, teacher_checkpoint: str) -> None:
     if teacher_model_type == ModelType.LLM_FINETUNE.value:
         from src.models.baseline_llm import BaselineLLM
         teacher_model_cfg = teacher_cfg.get("model", {})
+        teacher_data_cfg = teacher_cfg.get("data", {})
+        # Read task from teacher's saved config; falls back to current config's
+        # dataset if absent (older checkpoints predate the `task` parameter).
+        teacher_task = teacher_data_cfg.get("dataset", config.data.dataset)
         teacher = BaselineLLM(
             model_name=teacher_model_cfg.get("llm_name", config.model.llm_name),
             lora_r=teacher_model_cfg.get("lora_r", config.model.lora_r),
@@ -353,6 +363,7 @@ def _run_distill(config: ExperimentConfig, teacher_checkpoint: str) -> None:
             use_gradient_checkpointing=teacher_model_cfg.get(
                 "use_gradient_checkpointing", config.model.use_gradient_checkpointing
             ),
+            task=teacher_task,
         )
         # strict=False: bnb Linear4bit._load_from_state_dict consumes the
         # quant_state side-entries (weight.absmax / weight.quant_map /
@@ -384,10 +395,15 @@ def _run_distill(config: ExperimentConfig, teacher_checkpoint: str) -> None:
 
     if config.data.dataset == "maze":
         from src.data.maze_dataset import get_maze_loaders
+        # Same mask_non_path-honoring change as the LLM training loader: a
+        # distill teacher trained with the degenerate-optimum (True) emits
+        # "spam o everywhere" logits, and the student inherits that floor.
+        # v2 maze configs set this to false explicitly.
         train_loader, val_loader = get_maze_loaders(
             config.data.data_dir,
             batch_size=config.training.batch_size,
             num_workers=config.data.num_workers,
+            mask_non_path=config.data.mask_non_path,
         )
     else:
         from src.data.sudoku_dataset import get_sudoku_loaders

@@ -1021,3 +1021,75 @@ PYTHONPYCACHEPREFIX="C:\\temp\\m5_pycache" .venv/Scripts/python.exe -B -u \
 - Contract A: final post-trainer snapshot — 7 files copied to `C:/ml-trm-work/checkpoints to use/machine5/distill-qwen-sudoku-seed0-fixb__FINAL-*` (3 epoch checkpoints + latest + train_log + emissions + results). Tag: **redundancy snapshot machine5**.
 - Outputs: `C:/ml-trm-work/distill-qwen-sudoku-seed0-fixb/distill_sudoku_{latest,epoch_10,epoch_20,epoch_30}.pt` + train_log + emissions + results JSON.
 
+### [05:55 2026-04-29] Code refactor — `BaselineLLM` made vocab-aware (sudoku/maze)
+- **Why:** Track-A v2 results (Step C/D, §5.13) confirmed the maze LLM/distill checkpoints sit at the degenerate-strategy floor (puzzle 0/200 cell 21.20 %; puzzle 0/400 cell 12.50 %). Code review on 2026-04-29 morning found two compounding causes that v1 training shared:
+  1. `src/models/baseline_llm.py` hardcoded `SUDOKU_ID_TO_CHAR` (`.`,`.`,`1`..`9`) and `SUDOKU_VOCAB_SIZE = 11` and applied them to *every* call site, so maze training routed cell types `#`/`_`/`S`/`G`/`o` through arbitrary GPT-2 digit tokens (`1`..`5`). The LoRA had to learn the {maze-cell → GPT-2-digit} mapping with no semantic anchoring.
+  2. `main.py` did not pass `cfg.data.mask_non_path` to `get_maze_loaders(...)`, so maze training silently used the dataset's default `True` — the path-only loss that creates the "spam `o` everywhere" degenerate optimum (`src/data/maze_dataset.py:40-50`).
+- **Fix (5 edits, backwards-compatible):**
+  1. `src/models/baseline_llm.py`: added `MAZE_ID_TO_CHAR = {0:'.', 1:'#', 2:'_', 3:'S', 4:'G', 5:'o'}`, a `TASK_VOCAB` registry, a `task: str = "sudoku"` constructor param defaulting to the legacy behaviour, and renamed the buffer `sudoku_to_llm` → `vocab_to_llm`. Smoke-test: `BaselineLLM(model_name="gpt2", task="maze")` instantiates and `vocab_to_llm = [13, 2, 62, 50, 38, 78]` (`.`, `#`, `_`, `S`, `G`, `o` → real single-token GPT-2 ids).
+  2. `main.py:229-235`: pass `task=config.data.dataset` to the training BaselineLLM.
+  3. `main.py:241-247`: pass `mask_non_path=config.data.mask_non_path` to the LLM-training maze loader.
+  4. `main.py:348-356`: pass `task=teacher_data_cfg.get("dataset", config.data.dataset)` to the distill-teacher BaselineLLM, reading from the teacher's saved config so old sudoku checkpoints still load with `task=sudoku`.
+  5. `main.py:387-391`: pass `mask_non_path=config.data.mask_non_path` to the distill-training maze loader.
+  6. `scripts/eval_llm_checkpoint.py`: read `task` from the saved checkpoint config and pass to `BaselineLLM(...)`. Old checkpoints (no `task` saved) fall back to `cfg.data.dataset`.
+- Back-compat aliases preserved: `SUDOKU_VOCAB_SIZE`, `SUDOKU_ID_TO_CHAR` still importable. K-vote scripts (`run_kvote_*`) and the official trainer were not touched (they're sudoku-only and don't pass `task`, so default behaviour is identical).
+- Files: `src/models/baseline_llm.py`, `main.py`, `scripts/eval_llm_checkpoint.py`. Smoke test command archived in this entry above.
+
+### [06:05 2026-04-29] Step C-v2 launch — GPT-2 maze v2 training (vocab-aware + mask_non_path=false)
+- New config: `configs/llm_gpt2_maze_v2.yaml` — same hparams as v1 (lr 5e-5, batch_size 4, grad_accum 4, 30 epochs, lora_r 8) plus `data.mask_non_path: false`, `seed: 0`, output dir `C:/ml-trm-work/checkpoints to use/Machine 5/gpt2-maze-seed0-v2/`.
+- Launch:
+  ```bash
+  PYTHONPYCACHEPREFIX="C:/temp/m5_pycache" .venv/Scripts/python.exe -B -u \
+      main.py --mode train --config configs/llm_gpt2_maze_v2.yaml --seed 0 \
+      > logs/m5_autonomous/gpt2_maze_v2_train.log 2>&1 &
+  bash scripts/checkpoint_redundancy_watchdog.sh 5 \
+      "/c/ml-trm-work/checkpoints to use/Machine 5/gpt2-maze-seed0-v2" \
+      "gpt2-maze-seed0-v2" \
+      > logs/m5_autonomous/gpt2_maze_v2_watchdog.log 2>&1 &
+  ```
+- Outcome: in progress. Background bash IDs `boupskh0n` (trainer) + `bwl74mtrm` (watchdog). Pre-flight `[GPU Config]` + `[Seed] 0` lines printed → past the import phase that blocked Step A on 2026-04-28.
+- Distill v2 will launch from this run's `_latest.pt` once training completes.
+
+### [10:49 2026-04-29] Step C-v2 — DONE — **methodological retrain confirms the §5.3 thesis under clean protocol**
+- Wall-clock: **286.1 min** (4.77 h, exact match to the 2000 steps × 30 epochs × 3.5 it/s estimate). Energy: **1.243 kWh, 0.295 kg CO₂eq** (UK grid; project `gpt2_maze_train`).
+- Train log:
+
+  | epoch | train_loss | val_loss | val_puzzle | val_cell | wall (min) |
+  |---|---|---|---|---|---|
+  | 0 (baseline) | — | 3.8013 | 0.0000 | **0.4399** | 0.0 |
+  | 5 | 0.9872 | 0.9832 | 0.0000 | 0.5000 | 48.0 |
+  | 10 | 0.9844 | 0.9828 | 0.0000 | 0.5000 | 95.6 |
+  | 15 | 0.9831 | 0.9818 | 0.0000 | 0.4997 | 143.3 |
+  | 20 | 0.9823 | 0.9810 | 0.0000 | 0.5001 | 190.9 |
+  | 25 | 0.9817 | 0.9825 | 0.0000 | 0.4964 | 238.5 |
+  | **30** | **0.9809** | **0.9812** | **0.0000** | **0.4996** | **286.1** |
+
+- v1 → v2 comparison (both under `mask_non_path=False` — apples to apples):
+
+  | Run | Cell acc | Puzzle acc | Notes |
+  |---|---|---|---|
+  | v1 (Step C v2 eval) | 0.2120 | 0/200 | sudoku-token map applied to maze; degenerate-strategy floor |
+  | **v2 (this run)** | **0.4996** | **0/(8000 val)** | maze-aware token map + `mask_non_path=False` training |
+
+- **Reading.** Cell accuracy more than doubled (+28 pp) once GPT-2 has the right token embeddings (`#`/`_`/`S`/`G`/`o`) and the loss isn't gamed by the path-only mask. The 0.50 ceiling is the wall density — the model learned "predict `#` where the input has `#`" and stopped. The crucial number is unchanged: **puzzle_acc still 0.0000**. So the §5.3 finding ("LLMs can't solve mazes within the LoRA budget") is now demonstrated under a methodologically clean protocol; the v1 0/200 result was correct in conclusion but was confounded by token-map and metric issues that a reviewer could have flagged.
+- Train loss plateau (0.98 from epoch 5 onward) and val loss tracking train loss closely (no overfitting) → the model has fully exploited the wall-prediction signal that this configuration affords. More epochs would not help.
+- Outputs: `C:/ml-trm-work/checkpoints to use/Machine 5/gpt2-maze-seed0-v2/{gpt2_maze_latest.pt, gpt2_maze_epoch_{5,10,15,20,25,30}.pt, gpt2_maze_train_log.csv, gpt2_maze_training_results.json, emissions.csv}`. Watchdog snapshots at `Machine 5/snapshots/gpt2-maze-seed0-v2__*` and Drive-synced via `sync_machine5_to_drive.sh`.
+- Tag: **viability gate passed** (puzzle = 0 invariant under clean protocol; cell improved as predicted).
+
+### [10:50 2026-04-29] Step D-v2 launch — Distill GPT-2 maze v2 (from v2 teacher)
+- New config: `configs/distill_gpt2_maze_v2.yaml` — same student shape as v1 (3 layers / d_model 256 / 2.4 M params) so the v1↔v2 comparison isolates teacher quality. `data.mask_non_path: false`.
+- Launch:
+  ```bash
+  PYTHONPYCACHEPREFIX="C:/temp/m5_pycache" .venv/Scripts/python.exe -B -u \
+      main.py --mode distill --config configs/distill_gpt2_maze_v2.yaml \
+      --checkpoint "C:/ml-trm-work/checkpoints to use/Machine 5/gpt2-maze-seed0-v2/gpt2_maze_latest.pt" \
+      --seed 0 \
+      > logs/m5_autonomous/distill_gpt2_maze_v2_train.log 2>&1 &
+  bash scripts/checkpoint_redundancy_watchdog.sh 5 \
+      "/c/ml-trm-work/checkpoints to use/Machine 5/distill-gpt2-maze-seed0-v2" \
+      "distill-gpt2-maze-seed0-v2" \
+      > logs/m5_autonomous/distill_gpt2_maze_v2_watchdog.log 2>&1 &
+  ```
+- main._run_distill reads `task` from the teacher's saved config (the new `task=` parameter is preserved on save via `config.model_dump()`), so the teacher loads with the maze vocab map automatically.
+- Distill student trains on the teacher's maze-aware logits + hard CE on the un-masked labels. Expected: cell ≈ teacher's 0.50 (the student inherits the wall-density floor); puzzle = 0 (no model at this scale solves a 30×30 maze).
+
