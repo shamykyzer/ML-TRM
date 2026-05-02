@@ -1,0 +1,13 @@
+{
+  "config": "/home/kaizer/ML-TRM/configs/llm_gpt2_maze.yaml",
+  "checkpoint": "C:\\Users\\adsha\\Downloads\\ML final\\machine 5\\gpt2-maze-seed0\\gpt2_maze_latest.pt",
+  "max_batches": 200,
+  "mask_non_path": false,
+  "puzzle_acc": 0.0,
+  "cell_acc": 0.21382647385984427,
+  "puzzles_correct": 0,
+  "puzzles_total": 800,
+  "cells_correct": 153784,
+  "cells_graded": 719200,
+  "emissions_csv": null
+}

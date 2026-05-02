@@ -1,0 +1,5 @@
+label,task,model,k,puzzle_acc,cell_acc,mean_latency_ms,kwh_per_puzzle,n_puzzles,checkpoint_path
+distill-qwen-sudoku-fixed,sudoku,Qwen/Qwen2.5-0.5B,1,0.0000,0.2136,0.120,0.00000000,422786,C:\Users\adsha\Downloads\ML final\machine 1\distill-qwen-sudoku-seed0\distill_sudoku_latest.pt
+distill-qwen-sudoku-fixed,sudoku,Qwen/Qwen2.5-0.5B,2,0.0000,0.2137,0.120,0.00000000,422786,C:\Users\adsha\Downloads\ML final\machine 1\distill-qwen-sudoku-seed0\distill_sudoku_latest.pt
+distill-qwen-sudoku-fixed,sudoku,Qwen/Qwen2.5-0.5B,4,0.0000,0.2360,0.122,0.00000000,422786,C:\Users\adsha\Downloads\ML final\machine 1\distill-qwen-sudoku-seed0\distill_sudoku_latest.pt
+distill-qwen-sudoku-fixed,sudoku,Qwen/Qwen2.5-0.5B,8,0.0000,0.2619,0.127,0.00000000,422786,C:\Users\adsha\Downloads\ML final\machine 1\distill-qwen-sudoku-seed0\distill_sudoku_latest.pt

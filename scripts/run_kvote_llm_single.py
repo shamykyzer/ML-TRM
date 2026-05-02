@@ -38,16 +38,22 @@ def _parse_csv_ints(s: str) -> list[int]:
 
 def _build_test_loader(config, batch_size: int):
     """Mirror run_novelty_k_vote.py:_build_test_loader for the LLM path."""
+    # Resolve relative data_dir against REPO_ROOT so Windows Python can find
+    # WSL-hosted data when the config carries a relative path.
+    data_dir = config.data.data_dir
+    if not os.path.isabs(str(data_dir)):
+        data_dir = str(REPO_ROOT / data_dir)
+
     if config.data.dataset == "maze":
         from src.data.maze_dataset import get_maze_loaders
         _, test_loader = get_maze_loaders(
-            config.data.data_dir, batch_size=batch_size,
+            data_dir, batch_size=batch_size,
             num_workers=config.data.num_workers,
         )
     else:
         from src.data.sudoku_dataset import get_sudoku_loaders
         _, test_loader = get_sudoku_loaders(
-            config.data.data_dir, batch_size=batch_size,
+            data_dir, batch_size=batch_size,
             num_workers=config.data.num_workers,
         )
     return test_loader
@@ -112,6 +118,8 @@ def main() -> None:
     p.add_argument("--output-csv", default="",
                    help="output CSV path (defaults to results/novelty/"
                         "k_vote_results-<label>.csv)")
+    p.add_argument("--data-dir", default="",
+                   help="override config.data.data_dir (useful for cross-env runs)")
     args = p.parse_args()
 
     import torch
@@ -119,6 +127,8 @@ def main() -> None:
     from src.evaluation.k_vote import run_k_vote_llm
 
     config = load_config(args.config)
+    if args.data_dir:
+        config.data.data_dir = args.data_dir
 
     ckpt_path = Path(args.checkpoint).resolve()
     if not ckpt_path.is_file():

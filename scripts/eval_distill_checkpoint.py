@@ -49,8 +49,11 @@ def main(
     mask_non_path_override: bool | None = None,
     emissions_out: str | None = None,
     results_out: str | None = None,
+    data_dir_override: str | None = None,
 ) -> None:
     cfg = load_config(config_path)
+    if data_dir_override:
+        cfg.data.data_dir = data_dir_override
     mask_non_path = _resolve_mask_non_path(cfg, mask_non_path_override)
 
     print(f"[Eval-Distill] config         = {config_path}")
@@ -195,6 +198,7 @@ def _parse_argv(argv: list[str]) -> dict:
     mask_override: bool | None = None
     emissions_out: str | None = None
     results_out: str | None = None
+    data_dir: str | None = None
     i = 0
     while i < len(argv):
         tok = argv[i]
@@ -207,6 +211,9 @@ def _parse_argv(argv: list[str]) -> dict:
         elif tok == "--results-out":
             results_out = argv[i + 1]
             i += 2
+        elif tok == "--data-dir":
+            data_dir = argv[i + 1]
+            i += 2
         elif tok.startswith("--mask-non-path="):
             mask_override = _parse_bool(tok.split("=", 1)[1])
             i += 1
@@ -216,6 +223,9 @@ def _parse_argv(argv: list[str]) -> dict:
         elif tok.startswith("--results-out="):
             results_out = tok.split("=", 1)[1]
             i += 1
+        elif tok.startswith("--data-dir="):
+            data_dir = tok.split("=", 1)[1]
+            i += 1
         else:
             positional.append(tok)
             i += 1
@@ -224,6 +234,7 @@ def _parse_argv(argv: list[str]) -> dict:
         "mask_override": mask_override,
         "emissions_out": emissions_out,
         "results_out": results_out,
+        "data_dir": data_dir,
     }
 
 
@@ -246,4 +257,5 @@ if __name__ == "__main__":
         mask_non_path_override=parsed["mask_override"],
         emissions_out=parsed["emissions_out"],
         results_out=parsed["results_out"],
+        data_dir_override=parsed["data_dir"],
     )
