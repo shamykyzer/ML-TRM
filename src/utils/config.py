@@ -159,6 +159,8 @@ class TrainingConfig(BaseModel):
     # puzzle Sudoku — adds <1 s per eval.
     eval_trace_sample_size: int = 100
 
+    emissions_project_name: str = ""
+
 
 class DataConfig(BaseModel):
     dataset: str = "sudoku"

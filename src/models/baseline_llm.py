@@ -20,17 +20,49 @@ SUDOKU_ID_TO_CHAR = {
     2: "1", 3: "2", 4: "3", 5: "4", 6: "5",
     7: "6", 8: "7", 9: "8", 10: "9",
 }
-SUDOKU_VOCAB_SIZE = 11
+
+# Maze stored-token schema (see src/data/maze_dataset.py module docstring —
+# CHARSET = '# SGo'):
+#   id 0  = pad / ignore (only ever appears in labels, remapped to -100 by trainer)
+#   id 1  = # (wall)
+#   id 2  = ' ' (open cell)  — mapped to '_' for single-token GPT-2 compatibility
+#                              (BPE handles ' ' via the Ġ-prefix mechanism, which
+#                               makes the bare " " encode awkwardly; '_' is a
+#                               clean single-token semantic stand-in)
+#   id 3  = S (start)
+#   id 4  = G (goal)
+#   id 5  = o (path marker — the solution the model must output)
+# Same Fix-B principle as sudoku: route each maze cell type to a semantic
+# single-character token in the LLM's vocab so the LoRA learns "wall" via the
+# GPT-2 '#' embedding instead of an arbitrary punctuation slot. Without this,
+# maze training silently reused the sudoku digit map (cell type S -> token '1',
+# etc.), wasting capacity and giving the LLM no semantic anchoring for maze
+# structure.
+MAZE_ID_TO_CHAR = {
+    0: ".",   # pad / ignore
+    1: "#",   # wall
+    2: "_",   # open cell
+    3: "S",   # start
+    4: "G",   # goal
+    5: "o",   # path marker
+}
+
+TASK_VOCAB = {
+    "sudoku": {"size": 11, "id_to_char": SUDOKU_ID_TO_CHAR},
+    "maze":   {"size": 6,  "id_to_char": MAZE_ID_TO_CHAR},
+}
+
+SUDOKU_VOCAB_SIZE = TASK_VOCAB["sudoku"]["size"]
 
 
 class BaselineLLM(nn.Module):
     """Fine-tuned LLM baseline (GPT-2 / TinyLlama / Qwen) with LoRA.
 
-    Wraps a HuggingFace causal LM with PEFT LoRA adapters and remaps the
-    11-token sudoku vocabulary onto the LLM's own single-character digit /
-    blank tokens (Fix B). Inputs and labels enter as sudoku ids; outputs
-    leave as sudoku-id-space logits, so the trainer / eval / distillation
-    paths see vocab_size=11 throughout.
+    Wraps a HuggingFace causal LM with PEFT LoRA adapters and remaps a compact
+    task-vocabulary onto the LLM's own single-character tokens (Fix B). Inputs
+    and labels enter as task ids; outputs leave as task-id-space logits, so the
+    trainer / eval / distillation paths see logits.shape[-1] == vocab_size
+    regardless of which task or LLM backbone is used.
     """
 
     def __init__(
@@ -40,9 +72,16 @@ class BaselineLLM(nn.Module):
         lora_alpha: int = 16,
         use_qlora: bool = False,
         use_gradient_checkpointing: bool = False,
+        task: str = "sudoku",
     ):
         super().__init__()
         from peft import LoraConfig, TaskType, get_peft_model
+
+        if task not in TASK_VOCAB:
+            raise ValueError(
+                f"Unknown task {task!r}; expected one of {sorted(TASK_VOCAB)}."
+            )
+        self.task = task
 
         load_kwargs = {}
         if use_qlora:
@@ -59,16 +98,11 @@ class BaselineLLM(nn.Module):
         if use_qlora:
             from peft import prepare_model_for_kbit_training
 
-            # prepare_model_for_kbit_training enables gradient checkpointing and
-            # calls enable_input_require_grads so LoRA gradients flow correctly.
             base_model = prepare_model_for_kbit_training(
                 base_model,
                 use_gradient_checkpointing=use_gradient_checkpointing,
             )
 
-        # Determine target modules based on model architecture.
-        # DeepSeek-R1-Distill-Qwen inherits Qwen's module names; -Llama variant
-        # inherits Llama's. Match DeepSeek first to avoid a generic fallback.
         name_lower = model_name.lower()
         if "deepseek" in name_lower and "llama" in name_lower:
             target_modules = ["q_proj", "v_proj"]
@@ -94,12 +128,6 @@ class BaselineLLM(nn.Module):
         )
         self.model = get_peft_model(base_model, peft_config)
 
-        # Non-QLoRA path: enable gradient checkpointing AFTER get_peft_model so
-        # PEFT's module-rewrapping can't silently reset the flag. The QLoRA path
-        # above already handled this via prepare_model_for_kbit_training.
-        # enable_input_require_grads is required because the frozen base model's
-        # input embeddings don't require grad, which would break backprop
-        # through the checkpoint boundary.
         if use_gradient_checkpointing and not use_qlora:
             self.model.gradient_checkpointing_enable(
                 gradient_checkpointing_kwargs={"use_reentrant": False}
@@ -111,23 +139,23 @@ class BaselineLLM(nn.Module):
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # Build sudoku-id -> LLM-token-id lookup. We require each character to
-        # encode to exactly one token; if the tokenizer splits "1" into a
-        # multi-token sequence (it shouldn't for any GPT-2 / Llama / Qwen
-        # variant), abort loudly rather than silently truncate.
+        spec = TASK_VOCAB[task]
+        vocab_size = spec["size"]
+        id_to_char = spec["id_to_char"]
         ids = []
-        for i in range(SUDOKU_VOCAB_SIZE):
-            ch = SUDOKU_ID_TO_CHAR[i]
+        for i in range(vocab_size):
+            ch = id_to_char[i]
             tok_ids = self.tokenizer.encode(ch, add_special_tokens=False)
             if len(tok_ids) != 1:
                 raise ValueError(
                     f"Tokenizer for {model_name!r} encoded {ch!r} as "
                     f"{len(tok_ids)} tokens ({tok_ids}); BaselineLLM Fix B "
-                    f"requires single-token digits and a single-token blank."
+                    f"requires every {task!r} vocab entry to map to a "
+                    f"single LLM token."
                 )
             ids.append(tok_ids[0])
         self.register_buffer(
-            "sudoku_to_llm",
+            "vocab_to_llm",
             torch.tensor(ids, dtype=torch.long),
             persistent=False,
         )
@@ -138,25 +166,15 @@ class BaselineLLM(nn.Module):
         attention_mask: torch.Tensor | None = None,
         labels: torch.Tensor | None = None,
     ):
-        # Remap sudoku token ids -> LLM token ids before the embedding lookup.
-        llm_inputs = self.sudoku_to_llm[input_ids]
+        llm_inputs = self.vocab_to_llm[input_ids]
 
-        # Forward without HF's internal labels handling; we recompute loss in
-        # 11-dim sudoku-vocab space below so the gradient signal is "predict
-        # the right sudoku digit", not "avoid the other 50,246 GPT-2 tokens".
         out = self.model(
             input_ids=llm_inputs,
             attention_mask=attention_mask,
         )
 
-        # Project the LLM's full-vocab logits down to the 11 sudoku columns
-        # (in sudoku-id order). Trainer / eval / distillation now see
-        # logits.shape[-1] == SUDOKU_VOCAB_SIZE.
-        out.logits = out.logits.index_select(-1, self.sudoku_to_llm)
+        out.logits = out.logits.index_select(-1, self.vocab_to_llm)
 
-        # Re-derive loss in the 11-dim space using the standard HF causal-LM
-        # shift (logits[i] predicts token i+1). Labels are sudoku ids with
-        # the trainer's -100 ignore sentinel preserved.
         if labels is not None:
             shifted_logits = out.logits[..., :-1, :].contiguous()
             shifted_labels = labels[..., 1:].contiguous()

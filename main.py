@@ -233,6 +233,7 @@ def _run_train_once(config: ExperimentConfig, resume: str = "", init_weights: st
             lora_alpha=config.model.lora_alpha,
             use_qlora=config.model.use_qlora,
             use_gradient_checkpointing=config.model.use_gradient_checkpointing,
+            task=config.data.dataset,
         )
         print(f"LLM trainable params: {model.trainable_param_count():,} / {model.total_param_count():,}")
 
@@ -348,6 +349,8 @@ def _run_distill(config: ExperimentConfig, teacher_checkpoint: str) -> None:
     if teacher_model_type == ModelType.LLM_FINETUNE.value:
         from src.models.baseline_llm import BaselineLLM
         teacher_model_cfg = teacher_cfg.get("model", {})
+        teacher_data_cfg = teacher_cfg.get("data", {})
+        teacher_task = teacher_data_cfg.get("dataset", config.data.dataset)
         teacher = BaselineLLM(
             model_name=teacher_model_cfg.get("llm_name", config.model.llm_name),
             lora_r=teacher_model_cfg.get("lora_r", config.model.lora_r),
@@ -356,6 +359,7 @@ def _run_distill(config: ExperimentConfig, teacher_checkpoint: str) -> None:
             use_gradient_checkpointing=teacher_model_cfg.get(
                 "use_gradient_checkpointing", config.model.use_gradient_checkpointing
             ),
+            task=teacher_task,
         )
         # strict=False: bnb Linear4bit._load_from_state_dict consumes the
         # quant_state side-entries (weight.absmax / weight.quant_map /
