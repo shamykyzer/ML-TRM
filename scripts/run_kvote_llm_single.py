@@ -46,9 +46,11 @@ def _build_test_loader(config, batch_size: int):
 
     if config.data.dataset == "maze":
         from src.data.maze_dataset import get_maze_loaders
+        mask_non_path = getattr(config.data, "mask_non_path", False)
         _, test_loader = get_maze_loaders(
             data_dir, batch_size=batch_size,
             num_workers=config.data.num_workers,
+            mask_non_path=mask_non_path,
         )
     else:
         from src.data.sudoku_dataset import get_sudoku_loaders

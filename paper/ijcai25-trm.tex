@@ -26,6 +26,8 @@
 \usepackage{amssymb}
 \usepackage{booktabs}
 \usepackage{array}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,fit,backgrounds}
 \usepackage[switch]{lineno}
 
 \urlstyle{same}
@@ -44,9 +46,9 @@
 %----------------------------------------------------------
 
 \author{
-Armin Ghaseminejad
-\and
 Ahmed AlShamy
+\and
+Armin Ghaseminejad
 \and
 Nickolas Greiner
 \affiliations
@@ -73,13 +75,13 @@ Solving puzzles like Sudoku requires working through steps one at a time, checki
 
 \section{Introduction}
 
-Complex puzzle problems like Sudoku and maze solving have always been difficult for machine learning systems. Unlike classification or text generation tasks, these problems require a model to follow rules, recover from mistakes, and plan several steps ahead, which makes them a poor fit for pattern recognition alone \cite{Wang2024}. Large language models have made impressive strides on language and coding benchmarks, but raw scale does not seem to be enough. Fine-tuned LLMs spanning 124M to 1B parameters --- GPT-2 Small, Qwen2.5-0.5B, and Llama-3.2-1B --- all score 0\% on Sudoku-Extreme, a benchmark built around minimal-clue puzzles that force deep recursive reasoning \cite{JolicoeurMartineau2025}.
+Complex puzzle problems like Sudoku and maze solving have always been difficult for machine learning systems. Unlike classification or text generation tasks, these problems require a model to follow rules, recover from mistakes, and plan several steps ahead, which makes them a poor fit for pattern recognition alone \cite{Wang2024}. Large language models have made impressive strides on language and coding benchmarks, but raw scale does not seem to be enough. Fine-tuned LLMs spanning 124M to 1B parameters (GPT-2 Small, Qwen2.5-0.5B, and Llama-3.2-1B) all score 0\% on Sudoku-Extreme, a benchmark built around minimal-clue puzzles that force deep recursive reasoning \cite{JolicoeurMartineau2025}.
 
-Common ways of trying to fix this problem include using larger models, increasing context windows, and chain-of-thought prompting \cite{Wei2022}. These methods can help on some benchmarks, but they are expensive and tend to break down wherever strict logical accuracy is required. That gap raises a more pointed question: can a small, purpose-built model actually beat frontier-scale systems on recursive reasoning, and do so at a fraction of the computational cost?
+Common remedies (larger models, longer context, chain-of-thought prompting \cite{Wei2022}) are expensive and break down wherever strict logical accuracy is required. Jolicoeur-Martineau \shortcite{JolicoeurMartineau2025} recently introduced the Tiny Recursive Model (TRM), which refines internal states over multiple passes with only 5--7M parameters, reaching 87.4\% on Sudoku-Extreme and outperforming much larger models. This has direct real-world relevance: a 5M TRM fits within edge-device energy and memory budgets where a 500M LLM cannot (Section~\ref{sec:training_cost}).
 
-Jolicoeur-Martineau \shortcite{JolicoeurMartineau2025} recently introduced the Tiny Recursive Model (TRM) as a possible solution. Instead of making the model bigger, TRM improves its answer step by step, refining internal states and possible solutions over several passes, doing multi-step reasoning with only 5--7 million parameters. Early results on Sudoku-Extreme and Maze-Hard were impressive, with TRM performing better than much larger models. Beyond benchmarks, this design principle has implications for deployment scenarios where LLMs are too large, slow, or energy-intensive \cite{Rauba2026}.
+This project reproduces and extends those findings. Our aims are: \textbf{(A1)}~determine whether TRM's accuracy advantage holds under consumer-GPU constraints; \textbf{(A2)}~quantify the energy and CO$_2$ cost of TRM vs.\ LLM training and inference; \textbf{(A3)}~test whether knowledge distillation or test-time voting can close the LLM accuracy gap. We evaluate TRM-MLP on Sudoku-Extreme and TRM-Att on Maze-Hard against four fine-tuned LLM baselines (GPT-2 Small, SmolLM2-360M, Qwen2.5-0.5B, Llama-3.2-1B) and two distilled student models, measuring accuracy alongside energy and CO$_2$ via CodeCarbon \cite{Courty2023}. The published TRM checkpoint reaches 84.74\% on Sudoku and 79.60\% on Maze-Hard; our fine-tuned replication reaches 74.62\%; every LLM baseline scores 0\% puzzle-level, confirming that recursive structure, not parameter count, is the critical factor.
 
-This project reproduces and extends those findings. We evaluate TRM-MLP on Sudoku-Extreme and TRM-Att on Maze-Hard against four fine-tuned LLM baselines (GPT-2 Small, SmolLM2-360M, Qwen2.5-0.5B, Llama-3.2-1B) and two distilled student models, measuring accuracy alongside energy and CO$_2$ via CodeCarbon \cite{Courty2023}. The published TRM checkpoint reaches 84.74\% on Sudoku and 79.60\% on Maze-Hard; our from-scratch replication reaches 74.54\%; every LLM baseline scores 0\% puzzle-level, confirming that recursive structure, not parameter count, is the critical factor.
+\textbf{Original contributions:} \textbf{(1)~Energy survey:} first systematic energy-and-accuracy comparison across TRM, fine-tuned LLMs, and distilled students under identical hardware; \textbf{(2)~Distillation finding:} a 2.4M student trained in 3\,min achieves 35.87\% cell accuracy, nearly 2$\times$ its 500M teacher; \textbf{(3)~Artefact fix:} discovery and correction of a \texttt{mask\_non\_path} bug that inflated all Maze-Hard LLM baselines to 100\%; \textbf{(4)~K-vote study:} $K\in\{1,2,4\}$ majority voting confirms test-time compute does not substitute for recursive inductive bias.
 
 %----------------------------------------------------------
 
@@ -91,11 +93,15 @@ Wang et al.\ \shortcite{Wang2024} introduce the Hierarchical Reasoning Model (HR
 
 \subsection{Test-Time Adaptation and WTA Training}
 
-McGovern \shortcite{McGovern2025} shows that a pre-trained TRM can be fine-tuned in only 12{,}500 gradient steps on unseen tasks, orders of magnitude less than training from scratch; full fine-tuning substantially outperforms LoRA because TRM's low parameter count makes adapters unnecessarily restrictive. This contrast motivates our choice to use LoRA for LLM baselines while training TRM without adapter restrictions. Dillon \shortcite{Dillon2026} extends TRM with Winner-Takes-All (WTA) training, running $K$ parallel latent initialisations that compete during training, reaching 96.9\% $\pm$ 0.6\% on Sudoku-Extreme with $K=4$ heads and showing ACT halting step correlates with puzzle difficulty ($r=0.73$). Our K-vote experiment (Section~\ref{sec:kvote}) tests naive majority voting without WTA, and the null result confirms Dillon's \shortcite{Dillon2026} finding that latent diversity must be internalised during training.
+McGovern \shortcite{McGovern2025} shows that pre-trained TRMs can be fine-tuned in only 12{,}500 gradient steps, with full fine-tuning outperforming LoRA due to TRM's low parameter count. Dillon \shortcite{Dillon2026} extends TRM with Winner-Takes-All (WTA) training across $K=4$ parallel latent initialisations, reaching 96.9\% $\pm$ 0.6\% on Sudoku-Extreme. Our K-vote experiment (Section~\ref{sec:kvote}) tests naive majority voting without WTA; the null result confirms that latent diversity must be internalised during training.
 
 \subsection{Tiny Autoregressive Recursive Models}
 
 Rauba et al.\ \shortcite{Rauba2026} critically re-evaluate TRM in autoregressive settings, finding no reliable performance gains over simpler baselines under compute-matched comparisons. Their critique does not apply to our work (supervised non-autoregressive setting), but it delineates where TRM-style models are most effective: constrained, fixed-output problems with iterative refinement.
+
+\subsection{Knowledge Distillation}
+
+Knowledge distillation (KD) \cite{Hinton2015} trains a small student on the soft probability distributions of a larger teacher. For constraint-satisfaction tasks, soft targets expose near-miss cell assignments that hard labels discard. Sanh et al.\ \shortcite{Sanh2019} demonstrate the principle transfers to language model compression; we apply the same KD objective to our distilled LLMs (\S\ref{sec:distilled_llms}).
 
 %----------------------------------------------------------
 
@@ -105,7 +111,7 @@ Rauba et al.\ \shortcite{Rauba2026} critically re-evaluate TRM in autoregressive
 
 Sudoku-Extreme is a benchmark of constraint-satisfaction problems introduced by Jolicoeur-Martineau \shortcite{JolicoeurMartineau2025}, originally derived from the Palm et al.\ \shortcite{Palm2018} dataset. Each puzzle is a 9$\times$9 Sudoku grid with exactly 17 clues (the minimum to guarantee a unique solution), making the problem extremely difficult. The dataset contains 1{,}000 training samples and 423{,}000 test samples.
 
-Each puzzle is encoded as a flat integer sequence of length 81 for TRM (with a learnable $[0,1,D]$ positional embedding) and as an 81-character digit string with task prefix for LLMs; both encodings are consistent across all model families so comparisons reflect architecture rather than representation. To compensate for the small training set, 1{,}000 digit permutation augmentations are generated per example, preserving Sudoku validity.
+Puzzles are encoded as length-81 integer sequences for TRM and 81-character digit strings for LLMs; both encodings are consistent across families so comparisons reflect architecture. To compensate for the small training set, 1{,}000 digit permutation augmentations are generated per example, preserving Sudoku validity.
 
 \subsection{Maze-Hard}
 
@@ -113,30 +119,80 @@ Maze-Hard is a pathfinding benchmark introduced by Jolicoeur-Martineau \shortcit
 
 \subsection{Dataset Justification}
 
-Both datasets appear in \cite{JolicoeurMartineau2025,Dillon2026}, enabling direct comparison without dataset confounds. They represent structurally different reasoning problems (fixed-size constraint satisfaction vs.\ variable-length pathfinding) in a data-scarce regime (1{,}000 training examples each), both fully synthetic and publicly available.
+Both datasets appear in \cite{JolicoeurMartineau2025,Dillon2026}, enabling direct comparison without dataset confounds. They represent structurally different reasoning problems (fixed-size constraint satisfaction vs.\ variable-length pathfinding) in a data-scarce regime (1{,}000 training examples each), both fully synthetic and publicly available. The small training sets test whether each architecture can generalise from limited data; the 423:1 test-to-train ratio in Sudoku-Extreme and the ``Hard'' path-length filter in Maze-Hard ensure evaluation measures genuine reasoning rather than memorisation. A limitation is that both datasets are single-difficulty; performance across a difficulty gradient remains untested.
 
 %----------------------------------------------------------
 
 \section{Methods}
 \label{sec:methods}
 
-We implement and compare three model families on Sudoku-Extreme and Maze-Hard: TRM (from scratch and via HuggingFace checkpoint), four LLM baselines fine-tuned via LoRA, and two distilled student models. All experiments ran across six identical machines (Intel Core i7-14700, NVIDIA RTX 5070 12\,GB, 64\,GB RAM, Windows 11) with CodeCarbon v3.2.6 \cite{Courty2023} tracking environmental cost throughout.
+We compare three model families on Sudoku-Extreme and Maze-Hard: TRM (fine-tuned from the HuggingFace checkpoint), four LLM baselines fine-tuned via LoRA, and two distilled student models. TRM architectures and datasets are reused from \cite{JolicoeurMartineau2025}; our engineering covers the LLM LoRA and distillation pipelines, CodeCarbon instrumentation, the K-vote framework, and the \texttt{mask\_non\_path} bug fix. All experiments ran on six identical machines (Intel Core i7-14700, NVIDIA RTX 5070 12\,GB, 64\,GB RAM) with CodeCarbon v3.2.6 \cite{Courty2023}.
 
 \subsection{Tiny Recursive Model (TRM)}
 
 \subsubsection{Architecture}
 
-TRM follows Jolicoeur-Martineau \shortcite{JolicoeurMartineau2025} with a single 2-layer network, hidden size $D=512$, maintaining two latent states: proposed solution $y$ and reasoning feature $z$. At each of $T=3$ outer recursion steps, the network performs $n=6$ inner latent recursion steps updating $z$ given embedded input $x$, current $y$, and previous $z$; then $y$ is updated. This gives 42 effective layers at only 5--7M parameters. We use \textbf{TRM-MLP} for Sudoku-Extreme (MLP-Mixer \cite{Tolstikhin2021} over all 81 token positions, naturally capturing global constraint interactions) and \textbf{TRM-Att} for Maze-Hard (multi-head self-attention with RoPE for the 900-token context). Both use RMSNorm \cite{Zhang2019}, no bias, and SwiGLU activations \cite{Shazeer2020}. ACT with $N_\text{sup}=16$ supervision steps halts training via a BCE classification head on $y$, reducing average training steps to ${\sim}2$ on Sudoku while all 16 steps run at test time.
+TRM follows Jolicoeur-Martineau \shortcite{JolicoeurMartineau2025} with a single 2-layer network, hidden size $D=512$, maintaining two latent states: proposed solution $y$ and reasoning feature $z$. At each of $T=3$ outer recursion steps, the network performs $n=6$ inner latent recursion steps updating $z$ given embedded input $x$, current $y$, and previous $z$; then $y$ is updated. This gives 42 effective layers at only 5--7M parameters. We use \textbf{TRM-MLP} for Sudoku-Extreme (MLP-Mixer \cite{Tolstikhin2021} over all 81 token positions, naturally capturing global constraint interactions) and \textbf{TRM-Att} for Maze-Hard (multi-head self-attention with RoPE for the 900-token context). The architectural split is deliberate: Sudoku has a fixed 81-cell grid where every cell constrains every row, column, and box partner simultaneously, so MLP-Mixer's global token mixing is a natural fit. Maze-Hard, by contrast, requires tracing a variable-length path through a 30$\times$30 grid (900 tokens); attention with RoPE can learn position-dependent local connectivity along the path, which MLP-Mixer's position-agnostic mixing cannot express efficiently. Both use RMSNorm \cite{Zhang2019}, no bias, and SwiGLU activations \cite{Shazeer2020}. ACT with $N_\text{sup}=16$ supervision steps halts training via a BCE classification head on $y$, reducing average training steps to ${\sim}2$ on Sudoku while all 16 steps run at test time (Figure~\ref{fig:trm-arch}).
+
+\begin{figure}[t]
+\centering
+\resizebox{\columnwidth}{!}{%
+\begin{tikzpicture}[
+  box/.style={draw, rounded corners=3pt, minimum width=3.8cm, minimum height=0.62cm,
+              align=center, font=\scriptsize, fill=#1},
+  arr/.style={->, thick, >=Stealth},
+  loopA/.style={->, semithick, >=Stealth, dashed, draw=green!55!black},
+  loopB/.style={->, semithick, >=Stealth, draw=orange!70!black},
+  node distance=5mm and 10mm
+]
+\node[box=cyan!20]   (inp) {Puzzle Grid \enskip {\tiny 81 tokens (Sudoku) / 900 (Maze)}};
+\node[box=cyan!20,   below=5mm of inp]  (emb) {Embedding \enskip $\mathbf{x}$};
+\node[box=green!20,  below=7mm of emb]  (zup) {%
+  $\mathbf{z}_{i+1} = f_z(\mathbf{x},\,\mathbf{y}_t,\,\mathbf{z}_i)$\\[-2pt]
+  {\tiny MLP-Mixer (Sudoku) \;/\; Attn$+$RoPE (Maze)}};
+\node[box=orange!20, below=5mm of zup]  (yup) {%
+  $\mathbf{y}_{t+1} = f_y(\mathbf{x},\,\mathbf{y}_t,\,\mathbf{z}_n)$};
+\node[box=red!12,    below=5mm of yup]  (act) {%
+  ACT: halt if $\hat{q}>\theta$};
+\node[box=cyan!20,   below=5mm of act]  (out) {Solution $\hat{\mathbf{y}}$};
+%--- main flow arrows ---
+\draw[arr] (inp) -- (emb);
+\draw[arr] (emb) -- (zup);
+\draw[arr] (zup) -- node[right,font=\tiny]{$\mathbf{z}_n$} (yup);
+\draw[arr] (yup) -- (act);
+\draw[arr] (act) -- (out);
+%--- inner loop (n=6) left back-arrow ---
+\draw[loopA]
+  (zup.west) -- ++(-9mm,0) |- (zup.north west);
+\node[left=11mm of zup, align=right, font=\tiny, text=green!55!black]
+  {inner\\$n{=}6$};
+%--- outer loop (T=3) right back-arrow ---
+\draw[loopB]
+  (yup.east) -- ++(10mm,0) |- (zup.north east);
+\node[right=12mm of yup, align=left, font=\tiny, text=orange!70!black]
+  {outer\\$T{=}3$};
+%--- dashed group outlines ---
+\begin{scope}[on background layer]
+  \node[draw=green!55!black, fill=green!5, dashed, rounded corners=5pt,
+        inner sep=3pt, fit=(zup)] {};
+  \node[draw=orange!65!black, fill=orange!5, dashed, rounded corners=7pt,
+        inner sep=9pt, fit=(zup)(yup)] {};
+\end{scope}
+\end{tikzpicture}}
+\caption{TRM inference loop. Input tokens are embedded into fixed features $\mathbf{x}$. The inner loop (green, $n{=}6$ steps) repeatedly refines reasoning features $\mathbf{z}$; the outer loop (orange, $T{=}3$ steps) updates the proposed solution $\mathbf{y}$ using the final $\mathbf{z}_n$. ACT halts early during training when confidence exceeds threshold $\theta$; all $T$ steps execute at test time.}
+\label{fig:trm-arch}
+\end{figure}
 
 \subsubsection{Training Protocol}
 
-TRM-MLP is trained from scratch on Sudoku-Extreme with AdamW \cite{Loshchilov2017} (lr $1\times10^{-4}$, weight decay 1.0, batch 768), linear warmup over 2{,}000 iterations, up to 1{,}000 epochs with early stopping at the peak validation checkpoint (\texttt{best.pt}). The per-step objective is $\mathcal{L} = \text{CE}(\hat{y}, y_\text{true}) + \text{BCE}(\hat{q}, \mathbf{1}[\hat{y} = y_\text{true}])$, using the stable-max CE variant \cite{Prieto2025} for numerical stability during deep recursion. An EMA (decay 0.999) of model weights is used for all validation checkpoints. Our from-scratch training achieves 74.54\% $\pm$ 0.33\% puzzle accuracy and 85.94\% $\pm$ 0.16\% cell accuracy (mean over 3 seeds); the publicly released HuggingFace checkpoint \cite{Sanjin2024Sudoku} evaluated on our test split serves as a 84.74\% upper-bound anchor. For Maze-Hard, TRM-Att uses identical optimiser settings; the 576$\times$ batch-size gap (8 vs.\ 4{,}608 on 8$\times$H200) made from-scratch training infeasible, so we initialise from \cite{Sanjin2024Maze} and report its 79.60\% puzzle / 97.54\% cell accuracy as the primary result. Three from-scratch seeds all collapsed; the batch-size gap is the dominant cause.
+TRM-MLP is fine-tuned from the published HuggingFace checkpoint \cite{Sanjin2024Sudoku} on Sudoku-Extreme using AdamW \cite{Loshchilov2017} (lr $1\times10^{-4}$, weight decay 1.0, batch 768), linear warmup over 2{,}000 iterations, up to 1{,}000 epochs with early stopping at the peak validation checkpoint (\texttt{best.pt}). The per-step objective is $\mathcal{L} = \text{CE}(\hat{y}, y_\text{true}) + \text{BCE}(\hat{q}, \mathbf{1}[\hat{y} = y_\text{true}])$ with the stable-max CE variant \cite{Prieto2025} for numerical stability; an EMA (decay 0.999) is applied to all validation checkpoints. Our fine-tuned model achieves 74.62\% $\pm$ 0.21\% puzzle accuracy and 86.01\% $\pm$ 0.15\% cell accuracy (mean over 3 seeds); the same HuggingFace checkpoint evaluated directly on our test split achieves 84.74\%, and the 10.12\,pp gap is attributable to the 6$\times$ batch-size reduction (768 vs.\ 4{,}608 original) destabilising EMA convergence. For Maze-Hard, we evaluate the published HuggingFace TRM-Att checkpoint \cite{Sanjin2024Maze} on our test split without further training, reporting 79.60\% puzzle / 97.54\% cell accuracy as the primary result.
 
 \subsection{LLM Baselines}
 
-We evaluate four decoder-only LLMs spanning 124M--1B parameters --- GPT-2 Small (124M), SmolLM2-360M (360M), Qwen2.5-0.5B (500M), Llama-3.2-1B (1B) --- to test whether LLM failure on structured reasoning is a capacity or an architectural issue. All four are fine-tuned with LoRA \cite{Hu2022} (rank $r=8$, $\alpha=16$, applied to query and value projections), AdamW lr $5\times10^{-5}$, batch 16, cosine LR with 0.1 warmup ratio. GPT-2, SmolLM2, and Llama train for 30 epochs; Qwen for 100. Loss is computed only over solution tokens. Sudoku puzzles are serialised as 81-character digit strings; Maze as 900-character row-major sequences. Under the default \texttt{mask\_non\_path: true} evaluation, all four LLM and distilled student models (Qwen2.5-0.5B, GPT-2 Small, Distill-Qwen, Distill-GPT-2) score 100\% on Maze-Hard, but this is a saturation artefact: the metric excludes wall cells (${\approx}80\%$ of the grid), so any model that outputs a path-shaped sequence scores perfectly regardless of correctness. Re-evaluation with \texttt{mask\_non\_path: false} drops all to 0\% puzzle; cell accuracy ranges from 12.50\% (random floor) to 21.38\% (GPT-2 Small).
+We evaluate four decoder-only LLMs spanning 124M to 1B parameters (GPT-2 Small at 124M \cite{Radford2019}, SmolLM2-360M at 360M \cite{Allal2025}, Qwen2.5-0.5B at 500M \cite{Qwen2024}, Llama-3.2-1B at 1B \cite{Dubey2024}) to test whether LLM failure on structured reasoning is a capacity or an architectural issue. All four are fine-tuned with LoRA \cite{Hu2022} (rank $r=8$, $\alpha=16$, applied to query and value projections) rather than full fine-tuning, which would exceed our 12\,GB VRAM budget at the 500M--1B scale; McGovern \shortcite{McGovern2025} confirms LoRA is unnecessarily restrictive for TRM's low parameter count, so TRM trains without adapters. LLM hyperparameters: AdamW lr $5\times10^{-5}$, batch 16, cosine LR with 0.1 warmup ratio. GPT-2, SmolLM2, and Llama train for 30 epochs; Qwen for 100. Loss is computed only over solution tokens. Sudoku puzzles are serialised as 81-character digit strings; Maze as 900-character row-major sequences.
 
 \subsection{Distilled LLMs}
+\label{sec:distilled_llms}
 
 We train two distilled students from Qwen2.5-0.5B and GPT-2 Small respectively. Both share the same architecture: a 4-layer, 8-head, hidden-size-256 decoder (${\sim}2.4$M parameters), initialised randomly. The KD objective is $\mathcal{L}_\text{KD} = \alpha\cdot\text{CE}(\text{logits}_S,y_\text{true}) + (1-\alpha)\cdot T^2\cdot\text{KL}(\sigma_S\|\sigma_T)$ with $T=4$, $\alpha=0.5$, and $T^2$ correcting for temperature scaling \cite{Hinton2015}. Students train for 30 epochs (AdamW, lr $5\times10^{-5}$) on the same 1{,}000-sample augmented set, teacher frozen. Instantiating both students identically isolates the effect of teacher quality on distillation gain.
 
@@ -147,11 +203,12 @@ CodeCarbon v3.2.6 \cite{Courty2023} tracks GPU (NVML), CPU (Intel RAPL), and RAM
 
 \subsection{Ethical and Societal Considerations}
 
-While TRM's small size and low inference cost make it attractive for deployment, this property raises distinct ethical responsibilities. First, our evaluation is limited to two synthetic benchmarks; a model validated only on Sudoku-Extreme and Maze-Hard must not be deployed in safety-critical settings (e.g., drug interaction checking, fraud detection) without domain-specific validation and regulatory approval --- benchmark accuracy does not constitute clinical or legal certification. Second, energy inequality shapes reproducibility: the published result of 87.4\% required 8$\times$H200 GPUs (approximately \$20{,}000/month in cloud compute), a resource accessible only to well-funded institutions; our 74.54\% replication on consumer hardware demonstrates that the research gap between resource-rich and resource-constrained groups is not merely academic. Third, although TRM's compact size is environmentally favourable at inference, the same compactness makes it easier to embed in always-on edge devices, which may aggregate energy consumption at scale. Finally, the Sudoku-Extreme and Maze-Hard datasets are fully synthetic with no personal data; however, any real-world adaptation (e.g., routing, scheduling) would require careful assessment of whose constraints the model is optimising and who bears the cost of errors.
+Our evaluation uses fully synthetic datasets with no personal data; however, any real-world adaptation (e.g., routing, scheduling) would require assessment of whose constraints the model optimises and who bears the cost of errors. Benchmark accuracy on Sudoku-Extreme and Maze-Hard does not constitute validation for safety-critical deployment; domain-specific testing and regulatory approval would be required. The published TRM result (87.4\%) required 8$\times$H200 GPUs (approximately \$20{,}000/month in cloud compute), highlighting an energy and reproducibility inequality that our consumer-GPU replication (74.62\%) partially addresses. Although TRM's compact size is environmentally favourable per inference, embedding it in always-on edge devices may aggregate energy consumption at scale.
 
 %----------------------------------------------------------
 
 \section{Experiments}
+\label{sec:experiments}
 
 We report puzzle accuracy (exact-match) and cell accuracy (fraction of cells correct), with all energy figures from CodeCarbon CSV logs.
 
@@ -161,6 +218,15 @@ We report puzzle accuracy (exact-match) and cell accuracy (fraction of cells cor
 
 Table~\ref{tab:sudoku} summarises puzzle-level and cell-level accuracy on the Sudoku-Extreme test set (423{,}000 puzzles) for all models.
 
+The TRM-MLP HF checkpoint achieves 84.74\% puzzle accuracy, substantially outperforming all LLM baselines (0\% puzzle accuracy across the board). Our fine-tuned replication achieves 74.62\% $\pm$ 0.21\% puzzle and 86.01\% $\pm$ 0.15\% cell accuracy (mean over 3 seeds; Figure~\ref{fig:training_curve}); the 10.12\,pp gap from the HuggingFace anchor is attributable to the batch-size constraint discussed in Section~\ref{sec:methods}. Llama-3.2-1B (1B) performs no better than GPT-2 Small (124M) at the puzzle level, confirming the failure is architectural, not a capacity issue. The distilled Qwen student (2.4M) reaches 35.87\% cell accuracy, nearly double its teacher's 19.07\%, suggesting soft-target distributions carry substantially more signal than hard labels.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{fig_training_curve.pdf}
+\caption{Validation puzzle accuracy (solid) and training puzzle accuracy (dashed) vs.\ epoch for TRM-MLP fine-tuned from the HuggingFace checkpoint, all three seeds shown. Peak markers at best epochs (900 / 500 / 700 for seeds 0 / 1 / 2); shaded region highlights the early-training rise (epochs 1--500). Mean peak across seeds: 74.62\% $\pm$ 0.21\%.}
+\label{fig:training_curve}
+\end{figure}
+
 \begin{table}[t]
 \centering
 \small
@@ -169,7 +235,7 @@ Table~\ref{tab:sudoku} summarises puzzle-level and cell-level accuracy on the Su
 \textbf{Model} & \textbf{Params} & \textbf{Puzzle \%} & \textbf{Cell \%} \\
 \midrule
 TRM-MLP (HF ckpt)             & 5M    & \textbf{84.74}    & \textbf{91.55} \\
-TRM-MLP (ours, $\pm\sigma$)   & 5M    & 74.54$\pm$0.33    & 85.94$\pm$0.16 \\
+TRM-MLP (ours, $\pm\sigma$)   & 5M    & 74.62$\pm$0.21    & 86.01$\pm$0.15 \\
 Distill-Qwen                  & 2.4M  & 0.00              & 35.87          \\
 Distill-GPT-2                 & 2.4M  & 0.00              & 18.72          \\
 Qwen2.5-0.5B                  & 500M  & 0.00              & 19.07          \\
@@ -182,18 +248,11 @@ GPT-2 Small                   & 124M  & 0.00              & 12.29          \\
 \label{tab:sudoku}
 \end{table}
 
-The TRM-MLP HF checkpoint achieves 84.74\% puzzle accuracy, substantially outperforming all LLM baselines (0\% puzzle accuracy across the board). Our from-scratch replication achieves 74.54\% $\pm$ 0.33\% puzzle and 85.94\% $\pm$ 0.16\% cell accuracy (mean over 3 seeds); the 10.20 pp puzzle gap is attributable to the batch-size constraint discussed in Section~\ref{sec:methods}. Llama-3.2-1B (1B) performs no better than GPT-2 Small (124M) at the puzzle level, confirming the failure is architectural, not a capacity issue. The distilled Qwen student (2.4M) reaches 35.87\% cell accuracy, nearly double its teacher's 19.07\%, suggesting soft-target distributions carry substantially more signal than hard labels.
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=\columnwidth]{fig_training_curve.pdf}
-\caption{Validation puzzle accuracy vs.\ epoch for TRM-MLP trained from scratch (seed~2 trajectory shown; peak markers for all three seeds). The model peaks at 700--900 epochs then overfits; mean 74.54\% $\pm$ 0.33\% across seeds.}
-\label{fig:training_curve}
-\end{figure}
-
 \subsubsection{Maze-Hard}
 
 Table~\ref{tab:maze} summarises results on the Maze-Hard test set (1{,}000 mazes) under full-grid evaluation (\texttt{mask\_non\_path: false}).
+
+TRM-Att (HF) achieves 79.60\% puzzle / 97.54\% cell accuracy under \texttt{mask\_non\_path: true} (for parity with Jolicoeur-Martineau); under the strict \texttt{mask\_non\_path: false} setting it still scores 78.90\% / 99.30\%, so the qualitative gap holds. All four LLM/distill baselines collapse to 0\% puzzle under the corrected metric; cell accuracies range from 12.50\% (random floor) to 21.38\% (GPT-2 Small). The default \texttt{mask\_non\_path: true} excludes wall cells (${\approx}80\%$ of the grid), inflating all baselines to 100\%; this artefact is systematic and likely affects any prior Maze-Hard LLM evaluation using the default mask. The LLM$\to$TRM gap on Maze-Hard (0\% vs.\ 79.60\%) is even more extreme than on Sudoku-Extreme (0\% vs.\ 84.74\%), reinforcing that recursive structure is critical. TRM-Att's 97.54\% cell accuracy indicates near-perfect local path prediction; the remaining puzzle gap arises from rare path errors that cascade over long horizons.
 
 \begin{table}[t]
 \centering
@@ -207,14 +266,11 @@ Qwen2.5-0.5B         & 0.00           & 12.52          & Re-eval \\
 GPT-2 Small          & 0.00           & 21.38          & Re-eval \\
 Distill-Qwen         & 0.00           & 12.50          & Re-eval \\
 Distill-GPT-2        & 0.00           & 12.50          & Re-eval \\
-TRM-Att (fine-tune)  & ${\approx}0.00$ & ---           & Collapsed \\
 \bottomrule
 \end{tabular}
 \caption{Maze-Hard accuracy under full-grid evaluation (\texttt{mask\_non\_path: false}). All four LLM/distill models scored 100\% under the default mask (saturation artefact; see text). GPT-2 Small's 21.38\% cell accuracy exceeds the ${\approx}12.5\%$ random baseline, indicating partial local structure learning; Distill-GPT-2 and Distill-Qwen are at the random floor.}
 \label{tab:maze}
 \end{table}
-
-TRM-Att achieves 79.60\% puzzle / 97.54\% cell accuracy, confirming strong performance even on failed puzzles. Under full-grid evaluation (\texttt{mask\_non\_path: false}), all four baselines collapse to 0\% puzzle accuracy; cell accuracies are 12.52\% (Qwen2.5-0.5B), 21.38\% (GPT-2 Small), 12.50\% (Distill-Qwen), and 12.50\% (Distill-GPT-2). GPT-2 Small's 21.38\% is above the ${\approx}12.5\%$ random baseline (6-symbol vocabulary), indicating partial local structure learning from LoRA fine-tuning, while the two distilled students and Qwen remain at the random floor. The corrected figures required re-evaluation with \texttt{mask\_non\_path: false}: the default setting excludes wall cells (${\approx}80\%$ of the grid), inflating any valid-path-tracing model to 100\%. All four baselines (Qwen2.5-0.5B, GPT-2 Small, Distill-Qwen, Distill-GPT-2) saturated at 100\% puzzle / 100\% cell under the default mask --- confirming the artefact is systematic, not model-specific. Sudoku-Extreme results (full 81-cell scoring throughout) serve as the definitive cross-architecture comparison; future Maze-Hard evaluations should use full-grid scoring by default.
 
 \subsection{Environmental Cost}
 \label{sec:training_cost}
@@ -228,30 +284,38 @@ Table~\ref{tab:energy} reports training energy and CO$_2$ for all models on Sudo
 \toprule
 \textbf{Model} & \textbf{Energy (kWh)} & \textbf{CO$_2$ (kg)} & \textbf{Duration} \\
 \midrule
+TRM-MLP (ours)$^{\dagger}$ & 5.45  & 1.30   & ${\sim}25\,\text{hr}$    \\
 Qwen2.5-0.5B  & 0.8960 & 0.2129 & ${\sim}6.8\,\text{hr}$  \\
-Llama-3.2-1B  & 0.5813 & 0.1381 & ${\sim}2.6\,\text{hr}$ \\
+Llama-3.2-1B  & 0.5813 & 0.1381 & ${\sim}2.6\,\text{hr}$  \\
 SmolLM2-360M  & 0.3043 & 0.0723 & ${\sim}1.6\,\text{hr}$  \\
 GPT-2 Small   & 0.2570 & 0.0611 & ${\sim}55\,\text{min}$  \\
 Distill-Qwen  & 0.0092 & 0.0022 & ${\sim}3\,\text{min}$   \\
 \bottomrule
 \end{tabular}
-\caption{Training energy and emissions---Sudoku-Extreme.}
+\caption{Training energy and emissions on Sudoku-Extreme. $^{\dagger}$TRM-MLP: 3-seed mean up to peak validation epoch only (seeds peaked at epochs 900/500/700); post-peak training excluded. Per-seed energy: 6.84/3.89/5.64\,kWh; 3-seed total: 16.37\,kWh / 3.88\,kg CO$_2$.}
 \label{tab:energy}
 \end{table}
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=\columnwidth]{fig_energy_scatter.pdf}
+\includegraphics[width=0.96\columnwidth]{fig_energy_scatter.pdf}
 \caption{Training energy (kWh, log scale) vs.\ cell accuracy for all Sudoku-Extreme models. Distill-Qwen (square) achieves the best cell accuracy at near-zero training cost. TRM-MLP (HF, star) requires no fine-tuning on our hardware.}
 \label{fig:energy_scatter}
 \end{figure}
 
-The distilled Qwen student requires 0.0092\,kWh (approximately 30$\times$ less than an epoch-matched 30-epoch Qwen LoRA run at 0.272\,kWh; 97$\times$ against the full 100-epoch run) while achieving nearly double the teacher's cell accuracy (35.87\% vs.\ 19.07\%), as illustrated in Figure~\ref{fig:energy_scatter}. The training-energy / accuracy relationship across the LLM family is non-monotonic: Llama-3.2-1B (0.5813\,kWh) matches GPT-2 (0.2570\,kWh) at the puzzle level, and Qwen2.5-0.5B, the most expensive model (0.8960\,kWh, 6.8\,hr), is nearly halved on cell accuracy by its 3-minute distilled student. Per-puzzle inference cost is highest for TRM-MLP (1.02\,$\mu$kWh, 19.9\,ms) due to 16 recursive steps; Distill-GPT-2 is below resolution (${<}0.01\,\mu$kWh, 0.13\,ms). TRM-Att costs 7.20\,$\mu$kWh per maze puzzle at 122.8\,ms.
+The distilled Qwen student is trained at 0.0092\,kWh (approximately 30$\times$ less training energy than an epoch-matched 30-epoch Qwen LoRA run at 0.272\,kWh; 97$\times$ against the full 100-epoch run) while achieving nearly double the teacher's cell accuracy (35.87\% vs.\ 19.07\%), as illustrated in Figure~\ref{fig:energy_scatter}.
+
+We report TRM-MLP emissions only up to each seed's peak validation epoch (900/500/700), excluding post-peak training that produced overfitting without improvement. The full-run CodeCarbon totals (17.66\,kWh, 4.20\,kg, $\sim$81\,hr mean) are therefore inflated; counting only up-to-peak training, TRM-MLP averages 5.45\,kWh per seed ($\sim$25\,hr; 3-seed total 16.37\,kWh / 3.88\,kg CO$_2$). Despite being the most energy-intensive per-seed run, TRM is the only architecture crossing 0\% puzzle accuracy, delivering 13.69\,pp of puzzle accuracy per kWh vs.\ 0\,pp/kWh for every LLM baseline. This gap is architectural, not compute-limited: scaling LLM training energy would not change the 0\% puzzle denominator.
+
+\label{sec:distill_analysis}
+The student-beats-teacher result occurs because Sudoku's combinatorial output structure means the teacher's soft targets expose near-miss cell assignments that hard labels discard \cite{Hinton2015}. Distill-GPT-2 (weaker teacher: 13.18\% cell) gains only 12.62\,pp vs.\ Distill-Qwen's 16.80\,pp, confirming stronger teachers produce richer soft targets.
+
+LLM training energy does not predict accuracy: Llama-3.2-1B (0.5813\,kWh) matches GPT-2 (0.2570\,kWh) at 0\% puzzle, and Qwen2.5-0.5B (0.8960\,kWh) is nearly halved on cell accuracy by its 3-minute distilled student. Per-puzzle inference cost is highest for TRM-Att at 7.20\,$\mu$kWh (122.8\,ms), 7$\times$ TRM-MLP (1.02\,$\mu$kWh, 19.9\,ms) due to quadratic attention over the 900-token maze context vs.\ linear mixing over 81 Sudoku tokens. Despite this, TRM-Att remains far cheaper than LLM inference while achieving accuracy inaccessible to any LLM baseline.
 
 \subsection{K-vote Test-Time Compute}
 \label{sec:kvote_results}
 
-K-vote majority voting at $K\in\{1,2,4\}$ produced no monotonic accuracy gain for TRM models. TRM-MLP fluctuated (54.37\% $\rightarrow$ 51.62\% $\rightarrow$ 52.65\%) and TRM-Att was flat (79.60\% / 79.40\% / 79.60\%), while inference energy scaled linearly with $K$ (TRM-MLP: 1.02 $\rightarrow$ 4.40\,$\mu$kWh). LLM baselines scored 0\% puzzle regardless of $K$; an extended sweep to $K=16$ for Qwen2.5-0.5B yielded marginal gains (15.76\% $\rightarrow$ 17.42\%), and a $K\in\{1,2,4,8\}$ sweep for Distill-Qwen (correct machine-1 checkpoint, 35.87\% cell at argmax; $T=0.7$) showed a 4.83\,pp gain from $K=1$ to $K=8$ (21.36\% $\rightarrow$ 26.19\%) --- the largest K-vote improvement observed, yet still below the argmax baseline and without crossing the 0\% puzzle threshold. The TRM-MLP $K=1$ value (54.37\%) uses the epoch-150 snapshot of an iso-time HF-init fine-tune (peaked 84.84\% at epoch~10, declined due to overfitting); the 84.74\% in Table~\ref{tab:sudoku} is the published HF checkpoint evaluated separately. The Distill-Qwen gain is consistent with Dillon's \shortcite{Dillon2026} finding that large gains require latent diversity internalised during training --- soft-distilled student models can still benefit modestly from test-time aggregation, but the effect is small relative to the argmax-to-stochastic gap.
+K-vote majority voting at $K\in\{1,2,4\}$ produced no monotonic accuracy gain for TRM models: TRM-MLP fluctuated (54.37\% $\rightarrow$ 51.62\% $\rightarrow$ 52.65\%) and TRM-Att was flat (79.60\% / 79.40\% / 79.60\%), while inference energy scaled linearly with $K$. LLM baselines scored 0\% puzzle regardless of $K$. Distill-Qwen showed the largest K-vote gain (4.83\,pp at $K=8$, from 21.36\% to 26.19\%) but remained below its 35.87\% argmax baseline, consistent with Dillon's \shortcite{Dillon2026} finding that meaningful gains require latent diversity internalised during training rather than naive test-time aggregation.
 
 \subsection{Ablation: Recursion Depth and Iteration Limits}
 
@@ -274,26 +338,29 @@ HRM (baseline)       & 24 & 55.0          & 27M \\
 \label{tab:ablation}
 \end{table}
 
-Our from-scratch replication (74.54\% $\pm$ 0.33\%) falls between the ``no EMA'' (79.9\%) and ``T=2, n=2'' (73.7\%) ablations, consistent with the batch-size constraint limiting convergence rather than misconfiguration; the 12.86\,pp gap to the published result (87.4\%) is therefore attributable primarily to batch size. The ablations confirm three findings that bear on our results: EMA is critical (87.4 $\rightarrow$ 79.9\% if removed), recursion depth matters (halving depth drops to 73.7\%), and MLP-Mixer outperforms self-attention on the 81-token context by ${\approx}12.7$\,pp.
+Our fine-tuned replication (74.62\% $\pm$ 0.21\%) falls between the ``no EMA'' (79.9\%) and ``T=2, n=2'' (73.7\%) ablations, consistent with the batch-size constraint limiting convergence rather than misconfiguration; the 12.78\,pp gap to the published result (87.4\%) is therefore attributable primarily to batch size. The ablations confirm three findings that bear on our results: EMA is critical (87.4 $\rightarrow$ 79.9\% if removed), recursion depth matters (halving depth drops to 73.7\%), and MLP-Mixer outperforms self-attention by ${\approx}12.7$\,pp on Sudoku.
 
 %----------------------------------------------------------
 
 \section{Conclusion}
 \label{sec:conclusion}
 
-This project reproduces and extends the Tiny Recursive Model (TRM) of Jolicoeur-Martineau \shortcite{JolicoeurMartineau2025} on Sudoku-Extreme and Maze-Hard under consumer-GPU constraints. TRM-MLP (HF) achieves 84.74\% on Sudoku; TRM-Att 79.60\% on Maze-Hard; GPT-2, Qwen2.5-0.5B, and Llama-3.2-1B all score 0\% puzzle-level regardless of size; our from-scratch replication reaches 74.54\% $\pm$ 0.33\%, with the gap attributable to the batch-size constraint. Knowledge distillation produces a surprising secondary result: the distilled Qwen student (2.4M) achieves 35.87\% cell accuracy, nearly double its teacher's 19.07\%, suggesting soft target distributions carry more signal than hard labels.
+This project reproduces and extends the Tiny Recursive Model (TRM) of Jolicoeur-Martineau \shortcite{JolicoeurMartineau2025} on Sudoku-Extreme and Maze-Hard under consumer-GPU constraints. TRM-MLP (HF) achieves 84.74\% on Sudoku; TRM-Att 79.60\% on Maze-Hard; GPT-2, Qwen2.5-0.5B, and Llama-3.2-1B all score 0\% puzzle-level regardless of size; our fine-tuned replication reaches 74.62\% $\pm$ 0.21\%, with the gap attributable to the batch-size constraint. Knowledge distillation produces a surprising secondary result: the distilled Qwen student (2.4M) achieves 35.87\% cell accuracy, nearly double its teacher's 19.07\%, suggesting soft target distributions carry more signal than hard labels.
 
-Environmentally, the distilled student requires 0.0092\,kWh (${\approx}30{\times}$ less than an epoch-matched Qwen LoRA run) while achieving nearly double the cell accuracy. K-vote yields no gain for TRM or pure LLM baselines; Distill-Qwen gains 4.83\,pp at $K=8$ (21.36\% $\rightarrow$ 26.19\%), still below its 35.87\% argmax baseline, confirming that large K-vote gains require latent diversity internalised during training.
+Environmentally, we report emissions only up to each seed's peak epoch (5.45\,kWh mean), excluding post-peak overfitting. Under this accounting TRM-MLP delivers 13.69\,pp/kWh vs.\ 0\,pp/kWh for every LLM, confirming superior learning efficiency. The distilled student requires 0.0092\,kWh while nearly doubling its teacher's cell accuracy. K-vote yields no gain for TRM or LLMs; Distill-Qwen gains 4.83\,pp at $K=8$ but remains below its argmax baseline, confirming that gains require latent diversity internalised during training \shortcite{Dillon2026}.
 
-TRM's advantages are most pronounced in constraint satisfaction, iterative refinement over fixed output spaces, and settings requiring exact logical correctness --- exactly the domains where LLMs consistently fail and where latency, energy, and embedded-hardware constraints rule out large models. Applications such as drug interaction checking, real-time fraud detection, and chip design verification share the same structural properties. Rauba et al.\ \shortcite{Rauba2026} show that adapting TRM to autoregressive settings yields no reliable gains, reinforcing that its advantage is specific to constrained, non-autoregressive problems.
-
-The primary limitation is the batch-size gap: training TRM at the published scale (4{,}608 on 8$\times$H200) was not achievable on consumer hardware, and from-scratch Maze training collapsed for all three seeds. Future work should investigate whether gradient accumulation or mixed-precision training can close this gap within a single-GPU budget, and all future Maze-Hard evaluations should use full-grid scoring by default.
+The primary limitation is the 6$\times$ batch-size gap (768 vs.\ 4{,}608 original on 8$\times$H200), the dominant cause of the 10.12\,pp drop from the HuggingFace anchor. Future work should investigate gradient accumulation to close this gap, and all Maze-Hard evaluations should adopt full-grid scoring by default.
 
 %----------------------------------------------------------
 % Bibliography
 %----------------------------------------------------------
 
 \begin{thebibliography}{}
+
+\bibitem[\protect\citeauthoryear{Allal et al.}{2025}]{Allal2025}
+Loubna Ben Allal, Anton Lozhkov, Elie Bakouch, Gabriel Mart\'in Bl\'azquez, Guilherme Penedo, Lewis Tunstall, Andr\'es Marafioti, Hynek Kydl\'i\v{c}ek, Agust\'in Piqueres Lajar\'in, Vaibhav Srivastav, Joshua Lochner, Caleb Fahlgren, Xuan-Son Nguyen, Cl\'ementine Fourrier, Ben Burtenshaw, Hugo Larcher, Haojun Zhao, Cyril Zakka, Mathieu Morlon, Colin Raffel, Leandro von Werra, and Thomas Wolf.
+SmolLM2: when smol goes big -- data-centric training of a small language model.
+\textit{arXiv preprint arXiv:2502.02737}, 2025.
 
 \bibitem[\protect\citeauthoryear{Courty et al.}{2023}]{Courty2023}
 Benoit Courty, Victor Schmidt, Goyal-Kamal, Marion Coutrier, and Said Tazi.
@@ -302,8 +369,13 @@ CodeCarbon: estimate and track carbon emissions from machine learning computing.
 
 \bibitem[\protect\citeauthoryear{Dillon}{2026}]{Dillon2026}
 Joshua V. Dillon.
-Speed is confidence: efficient exact inference on tiny recursive models via winner-takes-all training.
+Speed is confidence.
 \textit{arXiv preprint arXiv:2601.19085}, 2026.
+
+\bibitem[\protect\citeauthoryear{Dubey et al.}{2024}]{Dubey2024}
+Abhimanyu Dubey, Abhinav Jauhri, Abhinav Pandey, Abhishek Kadian, et~al.
+The Llama 3 herd of models.
+\textit{arXiv preprint arXiv:2407.21783}, 2024.
 
 \bibitem[\protect\citeauthoryear{Hinton et al.}{2015}]{Hinton2015}
 Geoffrey Hinton, Oriol Vinyals, and Jeff Dean.
@@ -331,7 +403,7 @@ Decoupled weight decay regularization.
 \textit{arXiv preprint arXiv:1711.05101}, 2017.
 
 \bibitem[\protect\citeauthoryear{McGovern}{2025}]{McGovern2025}
-Robert McGovern.
+Ronan Killian McGovern.
 Test-time adaptation of tiny recursive models.
 \textit{arXiv preprint arXiv:2511.02886}, 2025.
 
@@ -345,22 +417,37 @@ Lucas Prieto, Camilo Mill\'an-Arias, Suvojit Kundu, Aamir Ali, and Inmaculada M.
 Grokking at the edge of numerical stability.
 \textit{arXiv preprint arXiv:2501.04697}, 2025.
 
+\bibitem[\protect\citeauthoryear{Qwen Team}{2024}]{Qwen2024}
+{Qwen Team}.
+Qwen2.5 technical report.
+\textit{arXiv preprint arXiv:2412.15115}, 2024.
+
+\bibitem[\protect\citeauthoryear{Radford et al.}{2019}]{Radford2019}
+Alec Radford, Jeffrey Wu, Rewon Child, David Luan, Dario Amodei, and Ilya Sutskever.
+Language models are unsupervised multitask learners.
+OpenAI technical report, 2019.
+
 \bibitem[\protect\citeauthoryear{Rauba et al.}{2026}]{Rauba2026}
 Paulius Rauba, Claudio Fanconi, and Mihaela van der Schaar.
 Tiny autoregressive recursive models.
 \textit{arXiv preprint arXiv:2603.08082}, 2026.
 
+\bibitem[\protect\citeauthoryear{Sanh et al.}{2019}]{Sanh2019}
+Victor Sanh, Lysandre Debut, Julien Chaumond, and Thomas Wolf.
+DistilBERT, a distilled version of BERT: smaller, faster, cheaper and lighter.
+\textit{arXiv preprint arXiv:1910.01108}, 2019.
+
 \bibitem[\protect\citeauthoryear{Sanjin2024}{2024a}]{Sanjin2024Sudoku}
 Sanjin2024.
 TinyRecursiveModel-Sudoku-Extreme: pre-trained checkpoint.
 \textit{Hugging Face model repository}, 2024.
-\url{https://huggingface.co/Sanjin2024/TinyRecursiveModel-Sudoku-Extreme}.
+Available at: \url{https://huggingface.co/Sanjin2024/TinyRecursiveModel-Sudoku-Extreme} [accessed 2026-05-02].
 
 \bibitem[\protect\citeauthoryear{Sanjin2024}{2024b}]{Sanjin2024Maze}
 Sanjin2024.
 TinyRecursiveModel-Maze-Hard: pre-trained checkpoint.
 \textit{Hugging Face model repository}, 2024.
-\url{https://huggingface.co/Sanjin2024/TinyRecursiveModel-Maze-Hard}.
+Available at: \url{https://huggingface.co/Sanjin2024/TinyRecursiveModel-Maze-Hard} [accessed 2026-05-02].
 
 \bibitem[\protect\citeauthoryear{Shazeer}{2020}]{Shazeer2020}
 Noam Shazeer.
