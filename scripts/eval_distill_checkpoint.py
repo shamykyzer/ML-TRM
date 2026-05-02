@@ -1,27 +1,22 @@
-"""One-shot re-evaluation of an existing LLM checkpoint using the fixed eval code.
+"""One-shot re-evaluation of a distilled LLM (student) checkpoint.
+
+Mirrors ``src.evaluation.evaluate.evaluate_standard`` for distilled students:
+the student is encoder-only / bidirectional (TransformerEncoder), so
+``logits[i]`` predicts ``labels[i]`` directly — no shift, unlike the
+causal-LM teacher path used by ``eval_llm_checkpoint.py``.
+
+This script accepts the same maze eval-mask fix and CodeCarbon flags as
+``eval_llm_checkpoint.py`` so the two re-eval paths produce comparable
+artifacts under ``results/eval_fixed/``.
 
 Usage (legacy positional, still supported):
-    python scripts/eval_llm_checkpoint.py <config_path> <checkpoint_path> [max_batches]
+    python scripts/eval_distill_checkpoint.py <config_path> <checkpoint_path> [max_batches]
 
 Usage (with the maze eval-mask fix and CodeCarbon emissions tracking):
-    python scripts/eval_llm_checkpoint.py <config_path> <checkpoint_path> [max_batches] \
+    python scripts/eval_distill_checkpoint.py <config_path> <checkpoint_path> [max_batches] \
         [--mask-non-path BOOL] \
         [--emissions-out PATH] \
         [--results-out PATH]
-
-Flags:
-    --mask-non-path BOOL    Override config's data.mask_non_path. ``false`` (the
-                             fix) scores all 900 cells of a 30x30 maze; ``true``
-                             reproduces the original path-only metric. If not
-                             provided the config's value is used; if the config
-                             also omits it, the default is ``false`` (safe).
-    --emissions-out PATH    If set, wrap the inference loop in a CodeCarbon
-                             EmissionsTracker and write its summary CSV to PATH.
-    --results-out PATH      If set, write a small JSON with puzzle/cell
-                             accuracy + sample counts alongside the emissions.
-
-max_batches: optional, default 200. Each batch is `batch_size` puzzles, so
-  200 * 16 = 3200 puzzles is enough to tell if cell_acc is 0% vs 20%+.
 """
 import functools
 import json
@@ -34,13 +29,11 @@ print = functools.partial(print, flush=True)  # noqa
 
 import torch
 
-from src.data.sudoku_dataset import get_sudoku_loaders
-from src.models.baseline_llm import BaselineLLM
+from src.models.distilled_llm import DistilledLLM
 from src.utils.config import load_config
 
 
 def _resolve_mask_non_path(cfg, override) -> bool:
-    """Pick mask_non_path from CLI override > config > safe default (False)."""
     if override is not None:
         return override
     data_cfg = getattr(cfg, "data", None)
@@ -60,38 +53,35 @@ def main(
     cfg = load_config(config_path)
     mask_non_path = _resolve_mask_non_path(cfg, mask_non_path_override)
 
-    print(f"[Eval] config         = {config_path}")
-    print(f"[Eval] checkpoint     = {ckpt_path}")
-    print(f"[Eval] llm_name       = {cfg.model.llm_name}")
-    print(f"[Eval] dataset        = {cfg.data.dataset}")
-    print(f"[Eval] max_batches    = {max_batches} (subsample for speed)")
-    print(f"[Eval] mask_non_path  = {mask_non_path}")
+    print(f"[Eval-Distill] config         = {config_path}")
+    print(f"[Eval-Distill] checkpoint     = {ckpt_path}")
+    print(f"[Eval-Distill] dataset        = {cfg.data.dataset}")
+    print(f"[Eval-Distill] max_batches    = {max_batches} (subsample for speed)")
+    print(f"[Eval-Distill] mask_non_path  = {mask_non_path}")
     if emissions_out:
-        print(f"[Eval] emissions_out  = {emissions_out}")
+        print(f"[Eval-Distill] emissions_out  = {emissions_out}")
     if results_out:
-        print(f"[Eval] results_out    = {results_out}")
+        print(f"[Eval-Distill] results_out    = {results_out}")
 
-    print("[Eval] building model...")
-    model = BaselineLLM(
-        model_name=cfg.model.llm_name,
-        lora_r=cfg.model.lora_r,
-        lora_alpha=cfg.model.lora_alpha,
-        use_qlora=cfg.model.use_qlora,
+    print("[Eval-Distill] building model...")
+    model = DistilledLLM(
+        vocab_size=cfg.model.vocab_size,
+        seq_len=cfg.model.seq_len,
+        d_model=cfg.model.distill_d_model,
+        n_layers=cfg.model.distill_n_layers,
+        ff_hidden=cfg.model.distill_ff_hidden,
+        n_heads=cfg.model.distill_n_heads,
     )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
-    print(f"[Eval] device = {device}")
+    print(f"[Eval-Distill] device = {device}")
 
-    print("[Eval] loading checkpoint...")
+    print("[Eval-Distill] loading checkpoint...")
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-    # strict=False: bnb Linear4bit consumes weight.absmax / weight.quant_map /
-    # weight.quant_state.bitsandbytes__nf4 to rebuild QuantState but leaves them
-    # in the unexpected-keys set, so strict=True false-positives on every QLoRA
-    # checkpoint. Load is correct either way.
-    model.load_state_dict(ckpt["model_state_dict"], strict=False)
+    model.load_state_dict(ckpt["model_state_dict"])
     model.eval()
 
-    print("[Eval] building test loader...")
+    print("[Eval-Distill] building test loader...")
     if cfg.data.dataset == "maze":
         from src.data.maze_dataset import get_maze_loaders
         _, test_loader = get_maze_loaders(
@@ -101,6 +91,7 @@ def main(
             mask_non_path=mask_non_path,
         )
     else:
+        from src.data.sudoku_dataset import get_sudoku_loaders
         _, test_loader = get_sudoku_loaders(
             cfg.data.data_dir,
             batch_size=cfg.training.batch_size,
@@ -108,7 +99,7 @@ def main(
         )
     n_total = len(test_loader)
     n_eval = min(n_total, max_batches)
-    print(f"[Eval] test_loader: {n_total} batches of {cfg.training.batch_size} available, evaluating {n_eval}")
+    print(f"[Eval-Distill] test_loader: {n_total} batches of {cfg.training.batch_size} available, evaluating {n_eval}")
 
     tracker = None
     if emissions_out:
@@ -139,18 +130,17 @@ def main(
                 inputs = inputs.to(device)
                 labels = labels.to(device)
 
-                outputs = model(input_ids=inputs)
-                preds = outputs.logits[:, :-1, :].argmax(-1)
-                labels_shifted = labels[:, 1:]
+                logits = model(inputs)
+                if hasattr(logits, "logits"):
+                    logits = logits.logits
 
-                # Under mask_non_path=True the dataset replaces wall/open/S/G
-                # labels with 0; the `labels_shifted != 0` mask then excludes
-                # them from grading, which is the path-only metric. Under
-                # mask_non_path=False the labels are unchanged so all 900
-                # cells participate.
-                mask = labels_shifted != 0
-                puzzle_correct = ((preds == labels_shifted) | ~mask).all(dim=-1)
-                cells_correct = ((preds == labels_shifted) & mask).sum().item()
+                # Encoder-only student: no shift. Mirrors evaluate_standard
+                # in src/evaluation/evaluate.py.
+                preds = logits.argmax(-1)
+                mask = labels != 0
+
+                puzzle_correct = ((preds == labels) | ~mask).all(dim=-1)
+                cells_correct = ((preds == labels) & mask).sum().item()
 
                 total_puzzles_correct += puzzle_correct.sum().item()
                 total_cells_correct += cells_correct
@@ -160,7 +150,7 @@ def main(
                 if (i + 1) % 10 == 0 or (i + 1) == n_eval:
                     running_cell = total_cells_correct / max(1, total_cells_graded)
                     running_puzzle = total_puzzles_correct / max(1, total_puzzles)
-                    print(f"[Eval] batch {i + 1}/{n_eval}: "
+                    print(f"[Eval-Distill] batch {i + 1}/{n_eval}: "
                           f"puzzle={running_puzzle:.4f} cell={running_cell:.4f} "
                           f"({total_puzzles_correct}/{total_puzzles} puzzles)")
     finally:
@@ -201,8 +191,6 @@ def _parse_bool(s: str) -> bool:
 
 
 def _parse_argv(argv: list[str]) -> dict:
-    """Return a dict with positional args + parsed flags, preserving the
-    legacy `<config> <checkpoint> [max_batches]` signature."""
     positional: list[str] = []
     mask_override: bool | None = None
     emissions_out: str | None = None

@@ -1,0 +1,72 @@
+[Eval] config         = configs/llm_qwen_maze.yaml
+[Eval] checkpoint     = C:/ml-trm-work/llm-qwen-maze-seed0/qwen2.5_0.5b_maze_latest.pt
+[Eval] llm_name       = Qwen/Qwen2.5-0.5B
+[Eval] dataset        = maze
+[Eval] max_batches    = 600 (subsample for speed)
+[Eval] mask_non_path  = False
+[Eval] emissions_out  = results/eval_fixed/qwen-maze-emissions.csv
+[Eval] results_out    = results/eval_fixed/qwen-maze-results.json
+[Eval] building model...
+W0428 00:27:32.536000 32608 .venv\Lib\site-packages\torch\utils\flop_counter.py:29] triton not found; flop counting will not work for triton kernels
+Loading weights:   0%|          | 0/290 [00:00<?, ?it/s]Loading weights:   0%|          | 1/290 [00:00<00:33,  8.63it/s]Loading weights:  22%|##2       | 65/290 [00:00<00:00, 356.01it/s]Loading weights:  55%|#####4    | 159/290 [00:00<00:00, 609.50it/s]Loading weights:  84%|########4 | 245/290 [00:00<00:00, 697.86it/s]Loading weights: 100%|##########| 290/290 [00:00<00:00, 622.96it/s]
+[Eval] device = cuda
+[Eval] loading checkpoint...
+[Eval] building test loader...
+[Eval] test_loader: 500 batches of 2 available, evaluating 500
+[codecarbon WARNING @ 00:27:36] Multiple instances of codecarbon are allowed to run at the same time.
+[Eval] batch 10/500: puzzle=0.0000 cell=0.1245 (0/20 puzzles)
+[Eval] batch 20/500: puzzle=0.0000 cell=0.1237 (0/40 puzzles)
+[Eval] batch 30/500: puzzle=0.0000 cell=0.1240 (0/60 puzzles)
+[Eval] batch 40/500: puzzle=0.0000 cell=0.1240 (0/80 puzzles)
+[Eval] batch 50/500: puzzle=0.0000 cell=0.1244 (0/100 puzzles)
+[Eval] batch 60/500: puzzle=0.0000 cell=0.1246 (0/120 puzzles)
+[Eval] batch 70/500: puzzle=0.0000 cell=0.1245 (0/140 puzzles)
+[Eval] batch 80/500: puzzle=0.0000 cell=0.1247 (0/160 puzzles)
+[Eval] batch 90/500: puzzle=0.0000 cell=0.1248 (0/180 puzzles)
+[Eval] batch 100/500: puzzle=0.0000 cell=0.1250 (0/200 puzzles)
+[Eval] batch 110/500: puzzle=0.0000 cell=0.1250 (0/220 puzzles)
+[Eval] batch 120/500: puzzle=0.0000 cell=0.1253 (0/240 puzzles)
+[Eval] batch 130/500: puzzle=0.0000 cell=0.1253 (0/260 puzzles)
+[Eval] batch 140/500: puzzle=0.0000 cell=0.1252 (0/280 puzzles)
+[Eval] batch 150/500: puzzle=0.0000 cell=0.1252 (0/300 puzzles)
+[Eval] batch 160/500: puzzle=0.0000 cell=0.1253 (0/320 puzzles)
+[Eval] batch 170/500: puzzle=0.0000 cell=0.1253 (0/340 puzzles)
+[Eval] batch 180/500: puzzle=0.0000 cell=0.1252 (0/360 puzzles)
+[Eval] batch 190/500: puzzle=0.0000 cell=0.1252 (0/380 puzzles)
+[Eval] batch 200/500: puzzle=0.0000 cell=0.1251 (0/400 puzzles)
+[Eval] batch 210/500: puzzle=0.0000 cell=0.1250 (0/420 puzzles)
+[Eval] batch 220/500: puzzle=0.0000 cell=0.1251 (0/440 puzzles)
+[Eval] batch 230/500: puzzle=0.0000 cell=0.1251 (0/460 puzzles)
+[Eval] batch 240/500: puzzle=0.0000 cell=0.1251 (0/480 puzzles)
+[Eval] batch 250/500: puzzle=0.0000 cell=0.1251 (0/500 puzzles)
+[Eval] batch 260/500: puzzle=0.0000 cell=0.1251 (0/520 puzzles)
+[Eval] batch 270/500: puzzle=0.0000 cell=0.1250 (0/540 puzzles)
+[Eval] batch 280/500: puzzle=0.0000 cell=0.1251 (0/560 puzzles)
+[Eval] batch 290/500: puzzle=0.0000 cell=0.1251 (0/580 puzzles)
+[Eval] batch 300/500: puzzle=0.0000 cell=0.1251 (0/600 puzzles)
+[Eval] batch 310/500: puzzle=0.0000 cell=0.1251 (0/620 puzzles)
+[Eval] batch 320/500: puzzle=0.0000 cell=0.1252 (0/640 puzzles)
+[Eval] batch 330/500: puzzle=0.0000 cell=0.1252 (0/660 puzzles)
+[Eval] batch 340/500: puzzle=0.0000 cell=0.1252 (0/680 puzzles)
+[Eval] batch 350/500: puzzle=0.0000 cell=0.1252 (0/700 puzzles)
+[Eval] batch 360/500: puzzle=0.0000 cell=0.1252 (0/720 puzzles)
+[Eval] batch 370/500: puzzle=0.0000 cell=0.1252 (0/740 puzzles)
+[Eval] batch 380/500: puzzle=0.0000 cell=0.1252 (0/760 puzzles)
+[Eval] batch 390/500: puzzle=0.0000 cell=0.1251 (0/780 puzzles)
+[Eval] batch 400/500: puzzle=0.0000 cell=0.1252 (0/800 puzzles)
+[Eval] batch 410/500: puzzle=0.0000 cell=0.1251 (0/820 puzzles)
+[Eval] batch 420/500: puzzle=0.0000 cell=0.1251 (0/840 puzzles)
+[Eval] batch 430/500: puzzle=0.0000 cell=0.1251 (0/860 puzzles)
+[Eval] batch 440/500: puzzle=0.0000 cell=0.1251 (0/880 puzzles)
+[Eval] batch 450/500: puzzle=0.0000 cell=0.1251 (0/900 puzzles)
+[Eval] batch 460/500: puzzle=0.0000 cell=0.1251 (0/920 puzzles)
+[Eval] batch 470/500: puzzle=0.0000 cell=0.1251 (0/940 puzzles)
+[Eval] batch 480/500: puzzle=0.0000 cell=0.1251 (0/960 puzzles)
+[Eval] batch 490/500: puzzle=0.0000 cell=0.1252 (0/980 puzzles)
+[Eval] batch 500/500: puzzle=0.0000 cell=0.1252 (0/1000 puzzles)
+
+[Results] puzzles: 0/1000 correct
+[Results] cells:   112513/899000 correct
+[Results] puzzle_acc = 0.000000
+[Results] cell_acc   = 0.125154
+[Results] wrote results/eval_fixed/qwen-maze-results.json

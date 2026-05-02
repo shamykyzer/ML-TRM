@@ -141,6 +141,7 @@ def _run_train_once(config: ExperimentConfig, resume: str = "", init_weights: st
             config.data.data_dir,
             batch_size=config.training.batch_size,
             num_workers=config.data.num_workers,
+            mask_non_path=config.data.mask_non_path,
         )
         trainer = TRMTrainer(model, train_loader, val_loader, config, resume_checkpoint=resume)
         trainer.train()
@@ -244,6 +245,7 @@ def _run_train_once(config: ExperimentConfig, resume: str = "", init_weights: st
                 config.data.data_dir,
                 batch_size=config.training.batch_size,
                 num_workers=config.data.num_workers,
+                mask_non_path=config.data.mask_non_path,
             )
         else:
             from src.data.sudoku_dataset import get_sudoku_loaders
@@ -279,6 +281,7 @@ def _run_eval(config: ExperimentConfig, checkpoint_path: str) -> None:
             config.data.data_dir,
             batch_size=config.training.batch_size,
             num_workers=config.data.num_workers,
+            mask_non_path=config.data.mask_non_path,
         )
     elif model_type in (ModelType.TRM_OFFICIAL_SUDOKU, ModelType.TRM_OFFICIAL_MAZE):
         from src.data.collate import official_collate_fn
@@ -388,6 +391,7 @@ def _run_distill(config: ExperimentConfig, teacher_checkpoint: str) -> None:
             config.data.data_dir,
             batch_size=config.training.batch_size,
             num_workers=config.data.num_workers,
+            mask_non_path=config.data.mask_non_path,
         )
     else:
         from src.data.sudoku_dataset import get_sudoku_loaders
